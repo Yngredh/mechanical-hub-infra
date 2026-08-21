@@ -72,14 +72,14 @@ module "eks" {
 module "app_lb" {
   source = "./modules/app-lb"
 
-  project                 = var.project
-  environment             = var.environment
-  vpc_id                  = module.vpc.vpc_id
-  private_subnet_ids      = module.vpc.private_subnet_ids
-  private_subnet_cidrs    = module.vpc.private_subnet_cidrs
-  node_security_group_id  = module.eks.node_security_group_id
-  autoscaling_group_name  = module.eks.node_group_autoscaling_group_name
-  node_port               = var.app_node_port
-  health_check_path       = var.app_health_check_path
-  tags                    = local.common_tags
+  project                = var.project
+  environment            = var.environment
+  vpc_id                 = module.vpc.vpc_id
+  private_subnet_ids     = module.vpc.private_subnet_ids
+  private_subnet_cidrs   = module.vpc.private_subnet_cidrs
+  node_security_group_id = module.eks.node_security_group_id
+  autoscaling_group_name = module.eks.node_group_autoscaling_group_name
+  node_port              = var.app_node_port
+  health_check_path      = var.app_health_check_path
+  tags                   = local.common_tags
 }
