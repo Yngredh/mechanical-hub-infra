@@ -1,0 +1,35 @@
+# Copie para terraform.tfvars e ajuste o que precisar. Nao versione o arquivo
+# preenchido — apenas este exemplo entra no repositorio.
+#
+# Este repositorio nao recebe segredos: nada aqui e sensivel. As credenciais da
+# AWS vem do ambiente (secrets do GitHub Actions no pipeline).
+
+aws_region  = "us-east-1"
+project     = "mechanical-hub"
+environment = "production"
+
+# --- Rede -------------------------------------------------------------------
+# Uma AZ por CIDR: as tres listas abaixo precisam ter o mesmo tamanho.
+vpc_cidr             = "10.0.0.0/16"
+availability_zones   = ["us-east-1a", "us-east-1b"]
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24"]
+
+# --- EKS --------------------------------------------------------------------
+eks_cluster_version    = "1.33"
+eks_node_instance_type = "t3.medium"
+eks_node_desired_size  = 2
+eks_node_min_size      = 1
+eks_node_max_size      = 4
+
+# --- ECR --------------------------------------------------------------------
+ecr_image_retention_count = 10
+
+# --- NLB interno da aplicacao -------------------------------------------------
+# Contrato de porta com o mechanical-hub: o Service la expoe NodePort neste
+# valor. Mudar aqui exige mudar o manifest k8s junto.
+app_node_port          = 30080
+app_health_check_path  = "/actuator/health/readiness"
+
+# --- AWS Academy ------------------------------------------------------------
+# lab_role_name = "LabRole"
