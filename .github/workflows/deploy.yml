@@ -1,0 +1,129 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Ambiente alvo
+        required: true
+        default: production
+        type: choice
+        options: [production, staging]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: 1.7.5
+  TF_DIR: infra
+  TF_STATE_KEY: mechanical-hub-infra/terraform.tfstate
+
+jobs:
+  deploy:
+    name: Provisionar infraestrutura base
+    runs-on: ubuntu-latest
+
+    outputs:
+      vpc-id: ${{ steps.tf-outputs.outputs.vpc_id }}
+      vpc-cidr: ${{ steps.tf-outputs.outputs.vpc_cidr }}
+      private-subnet-ids: ${{ steps.tf-outputs.outputs.private_subnet_ids }}
+      private-subnet-cidrs: ${{ steps.tf-outputs.outputs.private_subnet_cidrs }}
+      public-subnet-ids: ${{ steps.tf-outputs.outputs.public_subnet_ids }}
+      eks-cluster-name: ${{ steps.tf-outputs.outputs.eks_cluster_name }}
+      eks-cluster-endpoint: ${{ steps.tf-outputs.outputs.eks_cluster_endpoint }}
+      eks-cluster-security-group-id: ${{ steps.tf-outputs.outputs.eks_cluster_security_group_id }}
+      ecr-repository-url: ${{ steps.tf-outputs.outputs.ecr_repository_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar credenciais AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Definir variaveis de state
+        id: state
+        run: |
+          BUCKET="mechanical-hub-tfstate-${{ secrets.AWS_ACCOUNT_ID }}"
+          echo "bucket=${BUCKET}" >> $GITHUB_OUTPUT
+          echo "environment=${{ github.event.inputs.environment || 'production' }}" >> $GITHUB_OUTPUT
+
+      - name: Garantir bucket de state
+        run: |
+          aws s3api create-bucket \
+            --bucket ${{ steps.state.outputs.bucket }} \
+            --region ${{ env.AWS_REGION }} || true
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ steps.state.outputs.bucket }}" \
+            -backend-config="key=${{ env.TF_STATE_KEY }}" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+
+      - name: Terraform validate
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform validate
+
+      - name: Terraform plan
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_environment: ${{ steps.state.outputs.environment }}
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Terraform apply
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Publicar outputs do contrato
+        id: tf-outputs
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          # Escalares via -raw; listas via -json, para nao quebrar em virgulas.
+          for o in vpc_id vpc_cidr eks_cluster_name eks_cluster_endpoint \
+                   eks_cluster_security_group_id ecr_repository_url; do
+            echo "${o}=$(terraform output -raw ${o})" >> $GITHUB_OUTPUT
+          done
+          for o in private_subnet_ids private_subnet_cidrs public_subnet_ids; do
+            echo "${o}=$(terraform output -json ${o} | jq -c .)" >> $GITHUB_OUTPUT
+          done
+
+      - name: Resumo
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          {
+            echo "### Infraestrutura base provisionada"
+            echo ""
+            echo "| Output | Valor |"
+            echo "| --- | --- |"
+            echo "| vpc_id | \`$(terraform output -raw vpc_id)\` |"
+            echo "| vpc_cidr | \`$(terraform output -raw vpc_cidr)\` |"
+            echo "| private_subnet_ids | \`$(terraform output -json private_subnet_ids | jq -c .)\` |"
+            echo "| private_subnet_cidrs | \`$(terraform output -json private_subnet_cidrs | jq -c .)\` |"
+            echo "| public_subnet_ids | \`$(terraform output -json public_subnet_ids | jq -c .)\` |"
+            echo "| eks_cluster_name | \`$(terraform output -raw eks_cluster_name)\` |"
+            echo "| eks_cluster_endpoint | \`$(terraform output -raw eks_cluster_endpoint)\` |"
+            echo "| eks_cluster_security_group_id | \`$(terraform output -raw eks_cluster_security_group_id)\` |"
+            echo "| ecr_repository_url | \`$(terraform output -raw ecr_repository_url)\` |"
+            echo ""
+            echo "State: \`s3://${{ steps.state.outputs.bucket }}/${{ env.TF_STATE_KEY }}\`"
+            echo ""
+            echo "Consumidores (ADR-0004): \`mechanical-hub-database\`, \`mechanical-hub-auth\` e o pipeline de deploy de \`mechanical-hub\`."
+          } >> $GITHUB_STEP_SUMMARY
