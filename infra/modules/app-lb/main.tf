@@ -27,7 +27,7 @@
 # =============================================================================
 
 locals {
-  name_prefix = "${var.project}-${var.environment}-app"
+  name_prefix = "${var.project}-${var.environment}"
 }
 
 resource "aws_lb" "app" {
