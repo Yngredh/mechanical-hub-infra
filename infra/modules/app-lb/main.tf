@@ -116,7 +116,7 @@ resource "aws_security_group_rule" "app_nodeport_from_nlb" {
 resource "aws_lb_target_group" "otlp" {
   count = var.otlp_node_port == null ? 0 : 1
 
-  name        = "${local.name_prefix}-otlp-tg"
+  name        = "${local.name_prefix}-otlp"
   port        = var.otlp_node_port
   protocol    = "TCP"
   vpc_id      = var.vpc_id
