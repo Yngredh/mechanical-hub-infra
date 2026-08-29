@@ -47,3 +47,16 @@ variable "tags" {
   description = "Tags comuns aplicadas a todos os recursos do modulo."
   type        = map(string)
 }
+
+variable "otlp_node_port" {
+  description = <<-EOT
+    NodePort do endpoint OTLP/HTTP do coletor OpenTelemetry. Nulo nao cria
+    listener nenhum e o modulo se comporta como antes.
+
+    Existe para que as Lambdas do mechanical-hub-auth — que rodam na VPC, mas
+    fora do Kubernetes — consigam exportar telemetria. Precisa bater com
+    var.observability_otlp_http_node_port do modulo de observabilidade.
+  EOT
+  type        = number
+  default     = null
+}

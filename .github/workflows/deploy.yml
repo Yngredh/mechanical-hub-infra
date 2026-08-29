@@ -40,9 +40,24 @@ jobs:
       eks-cluster-endpoint: ${{ steps.tf-outputs.outputs.eks_cluster_endpoint }}
       eks-cluster-security-group-id: ${{ steps.tf-outputs.outputs.eks_cluster_security_group_id }}
       ecr-repository-url: ${{ steps.tf-outputs.outputs.ecr_repository_url }}
+      otlp-grpc-endpoint: ${{ steps.tf-outputs.outputs.otlp_grpc_endpoint }}
+      otlp-http-endpoint: ${{ steps.tf-outputs.outputs.otlp_http_endpoint }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Conferir secret do Grafana
+        env:
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+        run: |
+          if [ -z "${GRAFANA_ADMIN_PASSWORD}" ]; then
+            echo "::error::Secret GRAFANA_ADMIN_PASSWORD ausente. Cadastre-o no repositorio (minimo 12 caracteres) ou defina observability_enabled = false."
+            exit 1
+          fi
+          if [ ${#GRAFANA_ADMIN_PASSWORD} -lt 12 ]; then
+            echo "::error::GRAFANA_ADMIN_PASSWORD precisa ter ao menos 12 caracteres."
+            exit 1
+          fi
 
       - name: Configurar credenciais AWS
         uses: aws-actions/configure-aws-credentials@v4
@@ -86,10 +101,13 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         env:
           TF_VAR_environment: ${{ steps.state.outputs.environment }}
+          TF_VAR_grafana_admin_password: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
         run: terraform plan -input=false -out=tfplan
 
       - name: Terraform apply
         working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_grafana_admin_password: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
         run: terraform apply -input=false -auto-approve tfplan
 
       - name: Publicar outputs do contrato
@@ -103,6 +121,11 @@ jobs:
           done
           for o in private_subnet_ids private_subnet_cidrs public_subnet_ids; do
             echo "${o}=$(terraform output -json ${o} | jq -c .)" >> $GITHUB_OUTPUT
+          done
+          # Os endpoints de telemetria sao nulos quando a observabilidade esta
+          # desligada — `output -raw` falharia nesse caso, entao passa por jq.
+          for o in otlp_grpc_endpoint otlp_http_endpoint; do
+            echo "${o}=$(terraform output -json ${o} | jq -r '. // ""')" >> $GITHUB_OUTPUT
           done
 
       - name: Resumo
@@ -127,3 +150,62 @@ jobs:
             echo ""
             echo "Consumidores (ADR-0004): \`mechanical-hub-database\`, \`mechanical-hub-auth\` e o pipeline de deploy de \`mechanical-hub\`."
           } >> $GITHUB_STEP_SUMMARY
+
+          NS=$(terraform output -json observability_namespace | jq -r '. // ""')
+          if [ -n "$NS" ]; then
+            {
+              echo ""
+              echo "### Observabilidade (RFC-0004)"
+              echo ""
+              echo "| Output | Valor |"
+              echo "| --- | --- |"
+              echo "| observability_namespace | \`${NS}\` |"
+              echo "| otlp_grpc_endpoint | \`$(terraform output -json otlp_grpc_endpoint | jq -r '. // ""')\` |"
+              echo "| otlp_http_endpoint | \`$(terraform output -json otlp_http_endpoint | jq -r '. // ""')\` |"
+              echo ""
+              echo "Abrir o Grafana (usuario \`admin\`):"
+              echo ""
+              echo "\`\`\`bash"
+              echo "$(terraform output -json grafana_port_forward_command | jq -r '. // ""')"
+              echo "\`\`\`"
+            } >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> Observabilidade desligada neste apply (\`observability_enabled = false\`)." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Aguardar a stack de observabilidade
+        if: success()
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          NS=$(terraform output -json observability_namespace | jq -r '. // ""')
+          if [ -z "$NS" ]; then
+            echo "Observabilidade desligada — nada a verificar."; exit 0
+          fi
+
+          aws eks update-kubeconfig \
+            --name "$(terraform output -raw eks_cluster_name)" \
+            --region "${{ env.AWS_REGION }}"
+
+          # `helm_release` retorna assim que os objetos sao criados, nao quando
+          # os pods estao prontos. Sem esta espera, um pod em Pending por falta
+          # de espaco no node passaria despercebido ate alguem abrir o Grafana.
+          falhou=0
+          for d in kube-prometheus-stack-grafana \
+                   kube-prometheus-stack-kube-state-metrics \
+                   otel-collector-opentelemetry-collector; do
+            kubectl -n "$NS" rollout status "deployment/$d" --timeout=5m || falhou=1
+          done
+          for s in prometheus-kube-prometheus-stack-prometheus loki tempo; do
+            kubectl -n "$NS" rollout status "statefulset/$s" --timeout=5m || falhou=1
+          done
+
+          if [ "$falhou" -ne 0 ]; then
+            echo "::warning::Nem todos os componentes de observabilidade ficaram prontos. Diagnostico abaixo."
+            kubectl -n "$NS" get pods -o wide
+            kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -30
+            echo "::error::Stack de observabilidade incompleta — causa mais comum e falta de CPU/memoria nos nodes (ver eks_node_desired_size)."
+            exit 1
+          fi
+
+          kubectl -n "$NS" get pods

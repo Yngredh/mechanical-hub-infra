@@ -65,4 +65,35 @@ jobs:
           terraform test -verbose \
             -filter=tests/unit/region_unit.tftest.hcl \
             -filter=tests/unit/vpc_unit.tftest.hcl \
-            -filter=tests/unit/ecr_unit.tftest.hcl
+            -filter=tests/unit/ecr_unit.tftest.hcl \
+            -filter=tests/unit/observability_unit.tftest.hcl
+
+  dashboards:
+    name: Dashboards do Grafana
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Um dashboard com JSON invalido nao quebra o terraform apply: o
+      # ConfigMap e criado do mesmo jeito e o Grafana simplesmente ignora o
+      # painel. A falha so apareceria na hora de abrir a interface — que, numa
+      # gravacao de demonstracao, e tarde demais.
+      - name: Validar JSON e campos obrigatorios
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          arquivos=(infra/modules/observability/dashboards/*.json)
+          if [ ${#arquivos[@]} -eq 0 ]; then
+            echo "Nenhum dashboard encontrado."; exit 1
+          fi
+          for f in "${arquivos[@]}"; do
+            jq -e '.uid and .title and (.panels | type == "array" and length > 0)' "$f" > /dev/null \
+              || { echo "::error file=$f::JSON invalido ou sem uid/title/panels"; exit 1; }
+            # Todo painel precisa apontar para um datasource provisionado pelo
+            # modulo; um UID errado gera painel vazio sem mensagem de erro.
+            jq -e '[.panels[] | select(.type != "row") | .datasource.uid]
+                   | all(. == "mh-prometheus" or . == "mh-loki" or . == "mh-tempo")' "$f" > /dev/null \
+              || { echo "::error file=$f::painel aponta para datasource fora de mh-prometheus/mh-loki/mh-tempo"; exit 1; }
+            echo "OK $f — $(jq -r '.title' "$f") ($(jq '[.panels[] | select(.type != "row")] | length' "$f") paineis)"
+          done

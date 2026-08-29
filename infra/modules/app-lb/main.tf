@@ -96,3 +96,78 @@ resource "aws_security_group_rule" "app_nodeport_from_nlb" {
   cidr_blocks       = var.private_subnet_cidrs
   description       = "NodePort da aplicacao, alcancado pelo NLB interno (VPC Link do mechanical-hub-auth)"
 }
+
+# =============================================================================
+# Caminho de telemetria das Lambdas (RFC-0004, etapa 3)
+#
+# As funcoes do mechanical-hub-auth rodam na VPC, mas fora do Kubernetes: elas
+# nao resolvem o DNS interno do cluster e nao alcancam o Service ClusterIP do
+# coletor OpenTelemetry. Sem uma ponte, a telemetria delas simplesmente nao tem
+# para onde ir.
+#
+# A ponte reaproveita o mesmo NLB interno que ja atende a aplicacao: mais um
+# listener, apontando para o NodePort em que o coletor foi exposto. Zero
+# recurso de rede novo, zero IAM, e o mesmo padrao ja validado na porta 30080.
+#
+# Tudo aqui e opcional (count): com var.otlp_node_port nulo, nada e criado e o
+# modulo continua se comportando exatamente como antes.
+# =============================================================================
+
+resource "aws_lb_target_group" "otlp" {
+  count = var.otlp_node_port == null ? 0 : 1
+
+  name        = "${local.name_prefix}-otlp-tg"
+  port        = var.otlp_node_port
+  protocol    = "TCP"
+  vpc_id      = var.vpc_id
+  target_type = "instance"
+
+  preserve_client_ip = "false"
+
+  # Health check TCP, e nao HTTP: o coletor expoe o endpoint de saude numa
+  # porta diferente da de ingestao, que nao esta publicada como NodePort. Como
+  # o kube-proxy aceita a conexao em qualquer node enquanto o Service existir,
+  # a checagem TCP responde a pergunta que importa aqui — o caminho ate o
+  # coletor esta de pe.
+  health_check {
+    protocol            = "TCP"
+    port                = tostring(var.otlp_node_port)
+    healthy_threshold   = 3
+    unhealthy_threshold = 3
+    interval            = 30
+  }
+
+  tags = merge(var.tags, { Name = "${local.name_prefix}-otlp-tg" })
+}
+
+resource "aws_autoscaling_attachment" "otlp" {
+  count = var.otlp_node_port == null ? 0 : 1
+
+  autoscaling_group_name = var.autoscaling_group_name
+  lb_target_group_arn    = aws_lb_target_group.otlp[0].arn
+}
+
+resource "aws_lb_listener" "otlp" {
+  count = var.otlp_node_port == null ? 0 : 1
+
+  load_balancer_arn = aws_lb.app.arn
+  port              = var.otlp_node_port
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.otlp[0].arn
+  }
+}
+
+resource "aws_security_group_rule" "otlp_nodeport_from_nlb" {
+  count = var.otlp_node_port == null ? 0 : 1
+
+  security_group_id = var.node_security_group_id
+  type              = "ingress"
+  from_port         = var.otlp_node_port
+  to_port           = var.otlp_node_port
+  protocol          = "tcp"
+  cidr_blocks       = var.private_subnet_cidrs
+  description       = "NodePort OTLP/HTTP do coletor, alcancado pelas Lambdas via NLB interno"
+}

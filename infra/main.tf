@@ -82,4 +82,46 @@ module "app_lb" {
   node_port              = var.app_node_port
   health_check_path      = var.app_health_check_path
   tags                   = local.common_tags
+
+  # Ponte de telemetria para as Lambdas (RFC-0004, etapa 3). Elas rodam na VPC
+  # mas fora do cluster, entao nao alcancam o Service do coletor; um listener
+  # neste mesmo NLB resolve, sem recurso de rede novo. Nulo nao cria nada.
+  otlp_node_port = var.observability_enabled ? var.observability_otlp_http_node_port : null
+}
+
+# ── Observabilidade ──────────────────────────────────────────────────────────
+#
+# Implementa a RFC-0004: OpenTelemetry (coleta), Prometheus (metricas), Loki
+# (logs), Tempo (traces) e Grafana (visualizacao), instalados no proprio
+# cluster via Helm — mesmo padrao ja usado para o metrics-server.
+#
+# Mora neste repositorio, e nao no mechanical-hub, porque e infraestrutura de
+# plataforma: existe independente da aplicacao e e consumida por ela e pelas
+# Lambdas. Os outputs otlp_* sao o contrato que os dois lados usam para
+# exportar telemetria.
+#
+# O count permite desligar a stack inteira sem apagar codigo. Vale quando o
+# cluster do laboratorio esta apertado e a prioridade e ter a aplicacao no ar.
+
+module "observability" {
+  source = "./modules/observability"
+  count  = var.observability_enabled ? 1 : 0
+
+  project                = var.project
+  environment            = var.environment
+  cluster_name           = module.eks.cluster_name
+  namespace              = var.observability_namespace
+  app_namespace          = var.app_namespace
+  grafana_admin_password = var.grafana_admin_password
+  metrics_retention      = var.observability_metrics_retention
+  logs_retention         = var.observability_logs_retention
+  traces_retention       = var.observability_traces_retention
+  persistence_enabled    = var.observability_persistence_enabled
+  manage_ebs_csi_addon   = var.observability_manage_ebs_csi_addon
+  otlp_http_node_port    = var.observability_otlp_http_node_port
+  tags                   = local.common_tags
+
+  # Sem isto, o Terraform tentaria instalar os charts assim que o endpoint do
+  # cluster existisse — antes de haver node capaz de agendar os pods.
+  depends_on = [module.eks]
 }

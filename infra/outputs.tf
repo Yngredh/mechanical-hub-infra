@@ -116,3 +116,52 @@ output "app_backend_base_url" {
   EOT
   value       = "http://${module.app_lb.nlb_dns_name}:${var.app_node_port}"
 }
+
+# ── Observabilidade (RFC-0004) ───────────────────────────────────────────────
+#
+# Contrato com quem exporta telemetria. O consumidor imediato e o
+# mechanical-hub (OTEL_EXPORTER_OTLP_ENDPOINT no Deployment); as Lambdas do
+# mechanical-hub-auth entram depois, quando houver um listener no NLB
+# apontando para o NodePort do coletor.
+#
+# Todos ficam nulos com var.observability_enabled = false — o consumidor
+# precisa tratar esse caso em vez de assumir que sempre existe um coletor.
+
+output "otlp_grpc_endpoint" {
+  description = "Endpoint OTLP/gRPC do coletor OpenTelemetry, para cargas dentro do cluster. Nulo se a observabilidade esta desligada."
+  value       = try(module.observability[0].otlp_grpc_endpoint, null)
+}
+
+output "otlp_http_endpoint" {
+  description = "Endpoint OTLP/HTTP do coletor OpenTelemetry, para cargas dentro do cluster. Nulo se a observabilidade esta desligada."
+  value       = try(module.observability[0].otlp_http_endpoint, null)
+}
+
+output "observability_namespace" {
+  description = "Namespace onde a stack de observabilidade foi instalada. Nulo se desligada."
+  value       = try(module.observability[0].namespace, null)
+}
+
+output "otlp_vpc_endpoint" {
+  description = <<-EOT
+    Endereco OTLP/HTTP alcancavel de dentro da VPC, porem FORA do cluster — via
+    listener no NLB interno. E o valor de OTEL_EXPORTER_OTLP_ENDPOINT das
+    Lambdas do mechanical-hub-auth, que nao resolvem o DNS do Kubernetes.
+
+    Nulo quando a observabilidade esta desligada ou quando
+    observability_otlp_http_node_port e nulo.
+  EOT
+  value       = module.app_lb.otlp_backend_url
+}
+
+output "grafana_port_forward_command" {
+  description = <<-EOT
+    Comando pronto para abrir o Grafana em http://localhost:3000 (usuario
+    admin, senha em TF_VAR_grafana_admin_password).
+
+    Nao ha Ingress de proposito: expor uma interface administrativa na
+    internet, a partir de um cluster de laboratorio com credenciais rotativas,
+    nao se justifica.
+  EOT
+  value       = try(module.observability[0].grafana_port_forward_command, null)
+}
