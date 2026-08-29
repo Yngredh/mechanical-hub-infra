@@ -1,0 +1,128 @@
+# Values do coletor OpenTelemetry em modo agente — gerado por Terraform.
+#
+# Por que existe um segundo coletor.
+#
+# O coletor `otel-collector` roda como Deployment e so recebe o que lhe e
+# enviado por OTLP: metricas e traces que a aplicacao exporta ativamente. Logs
+# nao funcionam assim — a aplicacao escreve em stdout, e alguem precisa ler o
+# arquivo que o kubelet grava no disco de cada node.
+#
+# Ler arquivo de node exige um pod EM CADA node, ou seja, um DaemonSet. Dai a
+# topologia padrao do OpenTelemetry em Kubernetes, que e a adotada aqui:
+#
+#   agente (DaemonSet) -> le /var/log/pods de cada node -> Loki
+#   gateway (Deployment) -> recebe OTLP da aplicacao -> Prometheus / Tempo
+#
+# Sem este agente, os logs continuariam existindo em `kubectl logs` e sumiriam
+# junto com o pod, e o painel de logs do Grafana ficaria vazio para sempre.
+
+mode: daemonset
+
+image:
+  repository: otel/opentelemetry-collector-k8s
+
+presets:
+  # Configura o receptor `filelog` sobre /var/log/pods, com a analise do
+  # formato de arquivo que o containerd grava e a remontagem de linhas
+  # quebradas. E o preset que evita reescrever essa configuracao a mao.
+  logsCollection:
+    enabled: true
+    # A aplicacao ja emite JSON estruturado e o agente nao publica os proprios
+    # logs em OTLP. Sem isto, cada erro do coletor viraria um log que ele
+    # mesmo coletaria — um laco que so aparece quando algo ja esta ruim.
+    includeCollectorLogs: false
+
+  # Enriquece cada log com namespace, pod, node e deployment de origem, lendo a
+  # API do Kubernetes. E RBAC do cluster, nao IAM da AWS.
+  kubernetesAttributes:
+    enabled: true
+
+# Um pod por node, e os nodes sao t3.medium compartilhados com a aplicacao.
+resources:
+  requests:
+    cpu: 25m
+    memory: 96Mi
+  limits:
+    cpu: 200m
+    memory: 192Mi
+
+# O agente nao recebe nada de fora: ele so le arquivo. Deixar portas OTLP
+# abertas em todo node seria superficie sem uso.
+ports:
+  otlp:
+    enabled: false
+  otlp-http:
+    enabled: false
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+config:
+  processors:
+    memory_limiter:
+      check_interval: 5s
+      limit_percentage: 80
+      spike_limit_percentage: 20
+
+    resource:
+      attributes:
+        - key: cluster
+          value: ${cluster_name}
+          action: upsert
+        - key: deployment.environment
+          value: ${environment}
+          action: upsert
+
+    # A aplicacao escreve uma linha JSON por evento (logback-spring.xml, no
+    # repositorio mechanical-hub). Esta etapa extrai dela apenas o que precisa
+    # existir FORA do corpo da mensagem:
+    #
+    #   - service.name, porque vira a label `service_name` do Loki, e e por ela
+    #     que o painel de logs seleciona o fluxo;
+    #   - severity_text, para o Loki e o Grafana reconhecerem o nivel.
+    #
+    # O corpo continua sendo a linha JSON original, de proposito: assim o
+    # `| json` das consultas do Grafana enxerga todos os campos, e a expressao
+    # regular do derivedFields encontra o trace_id na linha. Substituir o corpo
+    # pela mensagem "limpa" jogaria fora exatamente isso.
+    transform/parse_json:
+      error_mode: ignore
+      log_statements:
+        - context: log
+          statements:
+            - merge_maps(cache, ParseJSON(body), "upsert") where IsMatch(body, "^\\s*\\{")
+            - set(severity_text, cache["level"]) where cache["level"] != nil
+            - set(resource.attributes["service.name"], cache["service_name"]) where cache["service_name"] != nil
+
+    batch:
+      timeout: 10s
+      send_batch_size: 1024
+
+  exporters:
+    otlphttp/loki:
+      endpoint: ${loki_url}/otlp
+      tls:
+        insecure: true
+
+  extensions:
+    health_check:
+      endpoint: 0.0.0.0:13133
+
+  service:
+    extensions: [health_check]
+    pipelines:
+      logs:
+        # `filelog` e configurado pelo preset logsCollection e `k8sattributes`
+        # pelo preset kubernetesAttributes — os nomes precisam bater com os que
+        # os presets registram, senao o coletor recusa a configuracao ao subir.
+        receivers: [filelog]
+        processors: [memory_limiter, k8sattributes, transform/parse_json, resource, batch]
+        exporters: [otlphttp/loki]
+      # O agente nao trata metrica nem trace: quem faz isso e o gateway.
+      traces: null
+      metrics: null

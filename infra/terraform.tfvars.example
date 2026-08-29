@@ -1,8 +1,9 @@
 # Copie para terraform.tfvars e ajuste o que precisar. Nao versione o arquivo
 # preenchido — apenas este exemplo entra no repositorio.
 #
-# Este repositorio nao recebe segredos: nada aqui e sensivel. As credenciais da
-# AWS vem do ambiente (secrets do GitHub Actions no pipeline).
+# Este arquivo nao recebe segredos. As credenciais da AWS vem do ambiente
+# (secrets do GitHub Actions no pipeline), e a senha do Grafana vem de
+# TF_VAR_grafana_admin_password — nunca daqui.
 
 aws_region  = "us-east-1"
 project     = "mechanical-hub"
@@ -16,11 +17,14 @@ public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
 private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24"]
 
 # --- EKS --------------------------------------------------------------------
+# desired = 3 desde que a stack de observabilidade entrou: ela soma ~0,6 vCPU e
+# ~1,8 GiB so em requests. Com 2 nodes t3.medium, ela e a aplicacao com HPA
+# passam a disputar espaco e aparecem pods em Pending.
 eks_cluster_version    = "1.33"
 eks_node_instance_type = "t3.medium"
-eks_node_desired_size  = 2
+eks_node_desired_size  = 3
 eks_node_min_size      = 1
-eks_node_max_size      = 4
+eks_node_max_size      = 5
 
 # --- ECR --------------------------------------------------------------------
 ecr_image_retention_count = 10
@@ -28,8 +32,32 @@ ecr_image_retention_count = 10
 # --- NLB interno da aplicacao -------------------------------------------------
 # Contrato de porta com o mechanical-hub: o Service la expoe NodePort neste
 # valor. Mudar aqui exige mudar o manifest k8s junto.
-app_node_port          = 30080
-app_health_check_path  = "/actuator/health/readiness"
+app_node_port         = 30080
+app_health_check_path = "/actuator/health/readiness"
+app_namespace         = "production"
+
+# --- Observabilidade (RFC-0004) ----------------------------------------------
+# OpenTelemetry + Prometheus + Loki + Tempo + Grafana, instalados no cluster.
+#
+# A senha do admin do Grafana NAO entra aqui. Exporte antes do apply:
+#   export TF_VAR_grafana_admin_password='...'   (minimo 12 caracteres)
+observability_enabled           = true
+observability_namespace         = "monitoring"
+observability_metrics_retention = "7d"
+observability_logs_retention    = "168h"
+observability_traces_retention  = "48h"
+
+# Armazenamento efemero por padrao: reiniciar um pod zera o historico daquele
+# sinal, mas a stack sobe sem depender de driver de volume. Para trocar por
+# volumes persistentes, ligue os dois de uma vez — a partir do Kubernetes 1.27
+# um PVC sem driver CSI fica pendente para sempre.
+observability_persistence_enabled  = false
+observability_manage_ebs_csi_addon = false
+
+# NodePort do coletor OTLP/HTTP. So passa a ser util quando as Lambdas do
+# mechanical-hub-auth forem instrumentadas — elas rodam na VPC, mas fora do
+# cluster, e nao resolvem o DNS interno do Kubernetes.
+# observability_otlp_http_node_port = 30317
 
 # --- AWS Academy ------------------------------------------------------------
 # lab_role_name = "LabRole"

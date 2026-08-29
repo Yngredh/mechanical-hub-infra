@@ -1,0 +1,46 @@
+# Values do Tempo — gerado por Terraform (templatefile).
+#
+# Chart monolitico (grafana/tempo): ingestao, indice e consulta num processo so,
+# gravando em disco local. O tempo-distributed seria a escolha de producao, mas
+# exige object storage — logo, IRSA, que o AWS Academy Lab bloqueia.
+
+tempo:
+  retention: ${traces_retention}
+
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+
+  # O coletor OpenTelemetry entrega os traces por OTLP. Nenhum outro protocolo
+  # de ingestao fica aberto: quem fala com o Tempo e o coletor, e so ele.
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+
+persistence:
+  enabled: ${persistence_enabled}
+%{ if persistence_enabled ~}
+  storageClassName: ${storage_class}
+  size: ${storage_size}
+%{ endif ~}
+
+# UI de consulta propria do Tempo. O Grafana ja e a interface de consulta da
+# stack inteira — subir outra so para traces duplicaria funcao e pod.
+tempoQuery:
+  enabled: false

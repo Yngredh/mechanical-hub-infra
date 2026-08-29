@@ -1,0 +1,315 @@
+# Values do kube-prometheus-stack — gerado por Terraform (templatefile).
+# Nao editar no cluster: qualquer alteracao manual e desfeita no proximo apply.
+#
+# Os requests/limits sao apertados de proposito: a stack inteira divide nodes
+# t3.medium com a aplicacao. Ver o cabecalho de modules/observability/main.tf.
+
+fullnameOverride: kube-prometheus-stack
+
+# ── Prometheus ───────────────────────────────────────────────────────────────
+
+prometheus:
+  prometheusSpec:
+    retention: ${metrics_retention}
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+
+    # Recebe as metricas que o coletor OpenTelemetry empurra por remote write.
+    # Sem isso o coletor sobe, mas nada do que ele exporta chega ao Prometheus.
+    enableRemoteWriteReceiver: true
+
+    externalLabels:
+      cluster: ${cluster_name}
+      environment: ${environment}
+
+    # Seletores nulos = o Prometheus adota qualquer ServiceMonitor/PodMonitor/
+    # PrometheusRule do cluster, nao so os que tem a label do proprio release.
+    # E o que permite a aplicacao declarar seu ServiceMonitor no repositorio
+    # mechanical-hub sem conhecer detalhes deste chart.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+
+%{ if persistence_enabled ~}
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: ${storage_class}
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: ${prometheus_storage_size}
+%{ endif ~}
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 768Mi
+      limits:
+        cpu: 800m
+        memory: 1536Mi
+
+# ── Alertmanager ─────────────────────────────────────────────────────────────
+#
+# Sobe sem receptor real: os alertas ficam visiveis na UI e no Grafana, mas nao
+# saem para lugar nenhum. Escolher o canal de notificacao (webhook, e-mail,
+# Slack) e item em aberto do plano de observabilidade — ate la, deixar um
+# receptor "null" e mais honesto do que um endpoint que ninguem le.
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+  config:
+    route:
+      group_by: ["alertname", "namespace"]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: "null"
+      routes:
+        - matchers:
+            - alertname = "Watchdog"
+          receiver: "null"
+    receivers:
+      - name: "null"
+
+# ── Grafana ──────────────────────────────────────────────────────────────────
+
+grafana:
+  adminPassword: ${grafana_admin_password}
+
+  # Sem Ingress: o acesso e por port-forward. Um cluster de laboratorio com
+  # credenciais rotativas nao e lugar para uma UI administrativa publica.
+  service:
+    type: ClusterIP
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 384Mi
+
+  sidecar:
+    dashboards:
+      # O sidecar observa a API do Kubernetes atras de ConfigMaps com a label
+      # abaixo e entrega o JSON ao Grafana sem reiniciar o pod. E o mecanismo
+      # que torna dashboard-como-codigo possivel.
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+      # Os datasources vem inteiros de additionalDataSources abaixo, com UID
+      # fixo — os JSON dos dashboards referenciam esses UIDs literalmente.
+      defaultDatasourceEnabled: false
+
+  additionalDataSources:
+    - name: Prometheus
+      uid: ${prometheus_datasource_uid}
+      type: prometheus
+      access: proxy
+      url: ${prometheus_url}
+      isDefault: true
+      jsonData:
+        timeInterval: 30s
+
+    - name: Loki
+      uid: ${loki_datasource_uid}
+      type: loki
+      access: proxy
+      url: ${loki_url}
+      jsonData:
+        # Transforma o trace_id que aparece no log em link clicavel para o
+        # trace correspondente no Tempo. E o que permite sair de "esta
+        # requisicao falhou" para "foi aqui que ela demorou" em um clique.
+        #
+        # O casamento e por expressao regular sobre a linha, e nao por label:
+        # trace_id chega ao Loki como atributo do log (o coletor o extrai do
+        # JSON), nao como label de fluxo. Procurar por label nao acharia nada e
+        # o link simplesmente nao apareceria — sem erro em lugar nenhum.
+        derivedFields:
+          - name: TraceID
+            matcherType: regex
+            matcherRegex: '"trace_id"\s*:\s*"([a-f0-9]+)"'
+            datasourceUid: ${tempo_datasource_uid}
+            url: "$${__value.raw}"
+            urlDisplayLabel: "Ver trace"
+
+    - name: Tempo
+      uid: ${tempo_datasource_uid}
+      type: tempo
+      access: proxy
+      url: ${tempo_http_url}
+      jsonData:
+        # O caminho inverso: de um trace, listar os logs daquela mesma
+        # requisicao.
+        tracesToLogsV2:
+          datasourceUid: ${loki_datasource_uid}
+          spanStartTimeShift: "-5m"
+          spanEndTimeShift: "5m"
+          filterByTraceID: true
+          tags:
+            - key: service.name
+              value: service_name
+        serviceMap:
+          datasourceUid: ${prometheus_datasource_uid}
+        nodeGraph:
+          enabled: true
+
+# ── Exporters de infraestrutura ──────────────────────────────────────────────
+#
+# Origem das metricas de CPU/memoria do Kubernetes exigidas pela fase:
+# node-exporter (metrica do node) e kube-state-metrics (estado dos objetos).
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 192Mi
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ── Componentes indisponiveis no EKS ─────────────────────────────────────────
+#
+# O control plane do EKS e gerenciado pela AWS e nao expoe estas metricas.
+# Deixar ligado gera alerta permanente de target inalcancavel — ruido que
+# ensina o time a ignorar alerta, exatamente o oposto do que se quer.
+
+kubeApiServer:
+  enabled: true
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+
+# ── Regras de alerta proprias ────────────────────────────────────────────────
+#
+# Ficam aqui, e nao em recursos `kubernetes_manifest` do tipo PrometheusRule,
+# porque aquele recurso exige a CRD ja instalada no momento do plan — o que
+# quebraria o primeiro apply, quando a CRD ainda nao existe.
+#
+# As metricas `mechanical_hub_*` sao o contrato de instrumentacao com a
+# aplicacao (etapa 2 do plano). Ate a aplicacao publica-las, estas regras
+# simplesmente nao disparam.
+
+additionalPrometheusRulesMap:
+  mechanical-hub:
+    groups:
+      - name: mechanical-hub-ordens-de-servico
+        rules:
+          - alert: MechanicalHubFalhaProcessamentoOS
+            expr: |
+              sum(rate(mechanical_hub_service_order_transitions_total{result="error"}[5m]))
+                /
+              clamp_min(sum(rate(mechanical_hub_service_order_transitions_total[5m])), 0.001)
+                > ${alert_error_rate}
+            for: 5m
+            labels:
+              severity: critical
+              component: service-orders
+            annotations:
+              summary: "Falhas no processamento de ordens de servico"
+              description: "{{ $value | humanizePercentage }} das transicoes de status de OS estao falhando nos ultimos 5 minutos."
+
+          - alert: MechanicalHubSemOrdensCriadas
+            expr: |
+              sum(increase(mechanical_hub_service_orders_created_total[1h])) == 0
+            for: 2h
+            labels:
+              severity: warning
+              component: service-orders
+            annotations:
+              summary: "Nenhuma ordem de servico criada nas ultimas horas"
+              description: "Pode ser periodo sem movimento, ou o fluxo de criacao de OS quebrado sem gerar erro."
+
+      - name: mechanical-hub-api
+        rules:
+          - alert: MechanicalHubLatenciaAlta
+            expr: |
+              histogram_quantile(
+                0.95,
+                sum by (le, uri) (rate(http_server_requests_seconds_bucket{namespace="${app_namespace}"}[5m]))
+              ) > ${alert_latency_seconds}
+            for: 10m
+            labels:
+              severity: warning
+              component: api
+            annotations:
+              summary: "Latencia p95 acima do limite em {{ $labels.uri }}"
+              description: "p95 de {{ $value | humanizeDuration }} em {{ $labels.uri }} nos ultimos 5 minutos."
+
+          - alert: MechanicalHubTaxaDeErroAlta
+            expr: |
+              sum(rate(http_server_requests_seconds_count{namespace="${app_namespace}", status=~"5.."}[5m]))
+                /
+              clamp_min(sum(rate(http_server_requests_seconds_count{namespace="${app_namespace}"}[5m])), 0.001)
+                > ${alert_error_rate}
+            for: 5m
+            labels:
+              severity: critical
+              component: api
+            annotations:
+              summary: "Taxa de erro 5xx acima do limite"
+              description: "{{ $value | humanizePercentage }} das respostas da API sao 5xx nos ultimos 5 minutos."
+
+          - alert: MechanicalHubAplicacaoIndisponivel
+            expr: |
+              sum(kube_deployment_status_replicas_available{namespace="${app_namespace}", deployment=~".*mechanical-hub.*"}) == 0
+            for: 3m
+            labels:
+              severity: critical
+              component: api
+            annotations:
+              summary: "Aplicacao principal sem replicas disponiveis"
+              description: "Nenhum pod pronto para atender no namespace ${app_namespace}."
+
+      - name: mechanical-hub-autenticacao
+        rules:
+          - alert: MechanicalHubPicoDeFalhaDeLogin
+            expr: |
+              sum(rate(mechanical_hub_auth_login_total{result="failed"}[5m])) > 1
+            for: 10m
+            labels:
+              severity: warning
+              component: auth
+            annotations:
+              summary: "Volume incomum de falhas de login"
+              description: "{{ $value | printf \"%.2f\" }} falhas de login por segundo — pode ser tentativa de forca bruta ou senha divergente apos deploy."

@@ -1,0 +1,96 @@
+# Values do Loki — gerado por Terraform (templatefile).
+#
+# Modo SingleBinary com backend `filesystem`: todos os componentes do Loki num
+# processo so, gravando no proprio pod. A alternativa de producao (SimpleScalable
+# ou Distributed sobre S3) exigiria uma IAM role via IRSA, que o AWS Academy Lab
+# nao permite criar — a mesma restricao documentada na RFC-0004.
+
+deploymentMode: SingleBinary
+
+loki:
+  # Sem multi-tenancy: o cluster inteiro e um inquilino so. Ligado, todo
+  # cliente precisaria mandar o header X-Scope-OrgID, inclusive o coletor.
+  auth_enabled: false
+
+  commonConfig:
+    replication_factor: 1
+
+  storage:
+    type: filesystem
+
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+  limits_config:
+    retention_period: ${logs_retention}
+    # Necessario para ingestao OTLP nativa: os atributos de recurso e de escopo
+    # do OpenTelemetry viram structured metadata, e e dai que sai o trace_id
+    # que liga log e trace no Grafana.
+    allow_structured_metadata: true
+    volume_enabled: true
+    reject_old_samples: true
+    reject_old_samples_max_age: 168h
+
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+
+  server:
+    http_listen_port: 3100
+    grpc_listen_port: 9095
+
+singleBinary:
+  replicas: 1
+
+  persistence:
+    enabled: ${persistence_enabled}
+%{ if persistence_enabled ~}
+    storageClass: ${storage_class}
+    size: ${storage_size}
+%{ endif ~}
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+
+# ── Componentes desligados ───────────────────────────────────────────────────
+#
+# O chart traz, por padrao, os alvos do modo escalavel e uma camada de cache em
+# memcached. Em SingleBinary eles nao sao usados, e cada um ocuparia um pod num
+# cluster que ja esta apertado.
+
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
+# O gateway e um nginx na frente do Loki. Com um unico consumidor interno (o
+# coletor) e um unico leitor (o Grafana), ele so acrescenta um salto.
+gateway:
+  enabled: false
+
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+# Sonda sintetica que escreve e le logs continuamente para medir a saude do
+# proprio Loki. Util em producao; aqui, so consumo.
+lokiCanary:
+  enabled: false
+
+test:
+  enabled: false
