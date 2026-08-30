@@ -85,6 +85,16 @@ jobs:
             --bucket ${{ steps.state.outputs.bucket }} \
             --region ${{ env.AWS_REGION }} || true
 
+      - name: Limpar target groups orfaos do app-lb
+        run: |
+          for TG in "mechanical-hub-${{ steps.state.outputs.environment }}-tg" "mechanical-hub-${{ steps.state.outputs.environment }}-otlp"; do
+            ARN=$(aws elbv2 describe-target-groups --names "$TG" --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
+            if [ -n "$ARN" ] && [ "$ARN" != "None" ]; then
+              echo "Apagando target group orfao: $TG ($ARN)"
+              aws elbv2 delete-target-group --target-group-arn "$ARN" || true
+            fi
+          done
+
       - name: Terraform init
         working-directory: ${{ env.TF_DIR }}
         run: |
