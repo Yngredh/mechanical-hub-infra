@@ -10,9 +10,13 @@ mode: deployment
 replicaCount: 1
 
 image:
-  # A distribuicao `k8s` traz os componentes de Kubernetes ja embutidos
-  # (k8sattributes, kubeletstats). A `core` nao os inclui.
-  repository: otel/opentelemetry-collector-k8s
+  # A distribuicao `contrib` traz tanto os componentes de Kubernetes
+  # (k8sattributes, kubeletstats, filelog) quanto os exporters de metricas
+  # (prometheus, prometheusremotewrite). A distribuicao `k8s` NAO inclui estes
+  # ultimos — foi o que causou o CrashLoopBackOff deste coletor (erro
+  # "unknown type: prometheusremotewrite" na validacao da config), e a `core`
+  # nao inclui nenhum dos dois grupos.
+  repository: otel/opentelemetry-collector-contrib
 
 presets:
   # Cria o ClusterRole/ClusterRoleBinding que o processor k8sattributes precisa

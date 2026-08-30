@@ -56,6 +56,20 @@ singleBinary:
     size: ${storage_size}
 %{ endif ~}
 
+%{ if !persistence_enabled ~}
+  # Sem PVC, o chart nao monta nada em /var/loki e o container roda com
+  # filesystem raiz somente-leitura — o Loki falhava ao subir com "mkdir
+  # /var/loki: read-only file system". Este emptyDir da a ele um diretorio
+  # gravavel sem exigir StorageClass nenhuma; o historico some ao reiniciar o
+  # pod, o que ja e o comportamento assumido quando persistence_enabled = false.
+  extraVolumes:
+    - name: storage
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: storage
+      mountPath: /var/loki
+%{ endif ~}
+
   resources:
     requests:
       cpu: 100m
