@@ -19,7 +19,11 @@
 mode: daemonset
 
 image:
-  repository: otel/opentelemetry-collector-k8s
+  # `contrib`, e nao `k8s`: ver o comentario equivalente em
+  # values/otel-collector.yaml.tftpl. Este agente ja usa componentes contrib
+  # (filelog, transform) que passaram na validacao — o gateway e que falhava
+  # por causa do exporter prometheusremotewrite, ausente na distribuicao `k8s`.
+  repository: otel/opentelemetry-collector-contrib
 
 presets:
   # Configura o receptor `filelog` sobre /var/log/pods, com a analise do
