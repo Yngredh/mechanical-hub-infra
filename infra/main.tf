@@ -63,7 +63,7 @@ module "eks" {
 
 # ── NLB interno da aplicacao ─────────────────────────────────────────────────
 #
-# Substitui o Service type: LoadBalancer publico do mechanical-hub (item 47).
+# Substitui o Service type: LoadBalancer publico do mechanical-hub (ver adendo da ADR-0003).
 # O AWS Load Balancer Controller exigiria IRSA, bloqueado no AWS Academy Lab;
 # provisionando aqui, a criacao usa a mesma identidade que ja aplica
 # VPC/EKS/ECR, sem IAM novo. Ver modules/app-lb/main.tf para o raciocinio
