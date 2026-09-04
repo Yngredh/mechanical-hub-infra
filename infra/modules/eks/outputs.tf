@@ -49,7 +49,7 @@ output "node_group_autoscaling_group_name" {
 
     Usado pelo modulo app-lb para anexar o target group do NLB interno da
     aplicacao (aws_autoscaling_attachment), em vez de um controller do
-    Kubernetes criar o load balancer. Ver plano item 47.
+    Kubernetes criar o load balancer.
   EOT
   value       = aws_eks_node_group.this.resources[0].autoscaling_groups[0].name
 }

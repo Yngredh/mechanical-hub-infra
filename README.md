@@ -189,7 +189,23 @@ espaço e aparecem pods em `Pending`. Voltar para 2 é uma linha — sabendo do
 efeito.
 
 ## Ordem de aplicação
+Dependência de **state** — quem precisa ler o output de quem para o `terraform apply` rodar:
 
 ```
 mechanical-hub-infra → mechanical-hub-database → mechanical-hub-auth → mechanical-hub
 ```
+
+Num ambiente criado do zero, a ordem de **execução dos pipelines** é outra: o smoke test de
+login do `mechanical-hub-auth` roda logo após o `apply` dele e só responde 401 (em vez de 500)
+depois que as migrations Flyway do `mechanical-hub` criaram `users.document_number` e o job da
+role `mechanical_hub_auth` rodou no `mechanical-hub-database` — dependência de dado, não de
+rede. A sequência que passa de primeira é:
+
+```
+mechanical-hub-infra → mechanical-hub-database → mechanical-hub (deploy) → job da role → mechanical-hub-auth
+```
+
+Uma exceção de ordem vale para a telemetria: o output `otlp_vpc_endpoint` deste repositório
+precisa existir antes do `apply` do `mechanical-hub-auth`, senão as Lambdas sobem com a
+telemetria desligada, sem erro (conferir o output `telemetry_enabled` no apply do `auth`).
+Detalhes no adendo da ADR-0003, no `mechanical-hub`.

@@ -1,7 +1,7 @@
 # =============================================================================
 # NLB interno da aplicacao — alvo do VPC Link do mechanical-hub-auth
 #
-# Fecha o item 47 do plano: o Service da aplicacao deixa de ser
+# Conectividade privada (adendo da ADR-0003): o Service da aplicacao deixa de ser
 # type: LoadBalancer publico (qualquer um que descobrisse o DNS do ELB podia
 # forjar os cabecalhos x-user-* que o GatewayAuthenticationFilter confia sem
 # validar assinatura). O API Gateway passa a alcancar a aplicacao por
