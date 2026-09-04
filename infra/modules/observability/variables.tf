@@ -84,8 +84,10 @@ variable "otlp_http_node_port" {
     Kubernetes: elas nao resolvem o DNS interno do cluster. Definindo um
     NodePort aqui, um listener no NLB interno (modulo app-lb) leva a
     telemetria delas ate o coletor — mesmo padrao ja usado na porta 30080 da
-    aplicacao. Fica desligado por padrao porque so passa a ser util na etapa 3
-    do plano, quando as Lambdas forem instrumentadas.
+    aplicacao. Fica desligado por padrao (null = nada criado); com as Lambdas
+    do mechanical-hub-auth ja instrumentadas (RFC-0004), definir esta porta e o
+    que liga a telemetria delas — sem ela, o auth sobe com telemetria
+    desligada, sem erro (conferir o output telemetry_enabled no apply do auth).
   EOT
   type        = number
   default     = null
