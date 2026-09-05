@@ -16,6 +16,27 @@ via `terraform_remote_state`, conforme a ADR-0004.
 | NLB interno da aplicação | Instrumentação do código → repositório de cada serviço |
 | Stack de observabilidade (RFC-0004) | |
 
+## 🛠️ Tecnologias
+
+| Camada | Tecnologia |
+|---|---|
+| IaC | Terraform >= 1.5, provider AWS ~> 5.0 |
+| Rede | Amazon VPC, subnets públicas/privadas, NAT Gateway |
+| Orquestração | Amazon EKS 1.33, node group gerenciado (3x t3.medium) |
+| Registro de imagens | Amazon ECR |
+| Load Balancing | Network Load Balancer interno (provisionado direto via Terraform, sem AWS Load Balancer Controller) |
+| Observabilidade | `kube-prometheus-stack`, `loki`, `tempo`, `opentelemetry-collector` (Helm, via `helm_release`) |
+| CI/CD | GitHub Actions |
+| Nuvem | AWS (us-east-1), AWS Academy Lab |
+
+## 🏗️ Arquitetura deste repositório
+
+![Diagrama de componentes da Fase 3](components-diagram.png)
+
+O desenho completo da plataforma (as quatro repositórios, APIs, banco e monitoramento) está em `docs/ARCHITECTURE.md` no repositório `mechanical-hub`.
+
+**Swagger/Postman:** este repositório não expõe API própria — provisiona apenas infraestrutura. A documentação das APIs (Swagger e exemplos de request) está no README do repositório `mechanical-hub`.
+
 ## Estrutura
 
 ```
