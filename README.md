@@ -16,6 +16,27 @@ via `terraform_remote_state`, conforme a ADR-0004.
 | NLB interno da aplicação | Instrumentação do código → repositório de cada serviço |
 | Stack de observabilidade (RFC-0004) | |
 
+## 🛠️ Tecnologias
+
+| Camada | Tecnologia |
+|---|---|
+| IaC | Terraform >= 1.5, provider AWS ~> 5.0 |
+| Rede | Amazon VPC, subnets públicas/privadas, NAT Gateway |
+| Orquestração | Amazon EKS 1.33, node group gerenciado (3x t3.medium) |
+| Registro de imagens | Amazon ECR |
+| Load Balancing | Network Load Balancer interno (provisionado direto via Terraform, sem AWS Load Balancer Controller) |
+| Observabilidade | `kube-prometheus-stack`, `loki`, `tempo`, `opentelemetry-collector` (Helm, via `helm_release`) |
+| CI/CD | GitHub Actions |
+| Nuvem | AWS (us-east-1), AWS Academy Lab |
+
+## 🏗️ Arquitetura deste repositório
+
+![Diagrama de componentes da Fase 3](components-diagram.png)
+
+O desenho completo da plataforma (as quatro repositórios, APIs, banco e monitoramento) está em `docs/ARCHITECTURE.md` no repositório `mechanical-hub`.
+
+**Swagger/Postman:** este repositório não expõe API própria — provisiona apenas infraestrutura. A documentação das APIs (Swagger e exemplos de request) está no README do repositório `mechanical-hub`.
+
 ## Estrutura
 
 ```
@@ -189,7 +210,23 @@ espaço e aparecem pods em `Pending`. Voltar para 2 é uma linha — sabendo do
 efeito.
 
 ## Ordem de aplicação
+Dependência de **state** — quem precisa ler o output de quem para o `terraform apply` rodar:
 
 ```
 mechanical-hub-infra → mechanical-hub-database → mechanical-hub-auth → mechanical-hub
 ```
+
+Num ambiente criado do zero, a ordem de **execução dos pipelines** é outra: o smoke test de
+login do `mechanical-hub-auth` roda logo após o `apply` dele e só responde 401 (em vez de 500)
+depois que as migrations Flyway do `mechanical-hub` criaram `users.document_number` e o job da
+role `mechanical_hub_auth` rodou no `mechanical-hub-database` — dependência de dado, não de
+rede. A sequência que passa de primeira é:
+
+```
+mechanical-hub-infra → mechanical-hub-database → mechanical-hub (deploy) → job da role → mechanical-hub-auth
+```
+
+Uma exceção de ordem vale para a telemetria: o output `otlp_vpc_endpoint` deste repositório
+precisa existir antes do `apply` do `mechanical-hub-auth`, senão as Lambdas sobem com a
+telemetria desligada, sem erro (conferir o output `telemetry_enabled` no apply do `auth`).
+Detalhes no adendo da ADR-0003, no `mechanical-hub`.

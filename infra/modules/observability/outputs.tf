@@ -41,10 +41,10 @@ output "tempo_url" {
 #
 # ATENCAO — estes enderecos so resolvem DE DENTRO do cluster. As Lambdas do
 # mechanical-hub-auth rodam na VPC, mas fora do Kubernetes: elas nao enxergam
-# o DNS interno do cluster e nao conseguem usar os valores abaixo. Fechar esse
-# caminho e trabalho da etapa 3 do plano de observabilidade; a preparacao
-# possivel aqui e var.otlp_http_node_port, que expoe o coletor num NodePort
-# alcancavel por um listener do NLB interno.
+# o DNS interno do cluster e nao conseguem usar os valores abaixo. O caminho
+# delas e outro, ja implementado: var.otlp_http_node_port expoe o coletor num
+# NodePort, e um listener do NLB interno (modulo app-lb) leva a telemetria das
+# Lambdas ate ele. Ver output otlp_vpc_endpoint.
 
 output "otlp_grpc_endpoint" {
   description = "Endpoint OTLP/gRPC do coletor. Valor de OTEL_EXPORTER_OTLP_ENDPOINT para cargas dentro do cluster."
