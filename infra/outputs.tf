@@ -9,8 +9,9 @@
 #                               vpc_cidr (fallback), eks_cluster_security_group_id
 #   - mechanical-hub-auth     : vpc_id, private_subnet_ids, app_nlb_arn,
 #                               app_backend_base_url
-#   - mechanical-hub (CI)     : eks_cluster_name, eks_cluster_endpoint,
-#                               ecr_repository_url
+#   - pipelines dos servicos  : eks_cluster_name, eks_cluster_endpoint,
+#     (orders, stock, billing,  ecr_repository_urls
+#      orchestrator)
 # =============================================================================
 
 # ── Rede ─────────────────────────────────────────────────────────────────────
@@ -85,14 +86,12 @@ output "eks_cluster_ca_certificate" {
 
 # ── ECR ──────────────────────────────────────────────────────────────────────
 
-output "ecr_repository_url" {
-  description = "URL do repositorio ECR. Usada como ECR_REGISTRY no pipeline de build."
-  value       = module.ecr.repository_url
-}
-
-output "ecr_repository_name" {
-  description = "Nome do repositorio ECR."
-  value       = module.ecr.repository_name
+output "ecr_repository_urls" {
+  description = <<-EOT
+    URL do repositorio ECR de cada servico (mapa servico -> URL). Substitui o
+    antigo ecr_repository_url: cada pipeline de servico le a sua chave.
+  EOT
+  value       = module.ecr.repository_urls
 }
 
 output "ecr_registry_id" {

@@ -39,6 +39,7 @@ module "ecr" {
   source = "./modules/ecr"
 
   project               = var.project
+  services              = keys(var.services)
   image_retention_count = var.ecr_image_retention_count
   tags                  = local.common_tags
 }

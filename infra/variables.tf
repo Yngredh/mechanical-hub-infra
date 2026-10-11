@@ -96,6 +96,39 @@ variable "eks_node_max_size" {
   default     = 5
 }
 
+# ── Servicos da aplicacao (Fase 4, ADR-0005) ─────────────────────────────────
+
+variable "services" {
+  description = <<-EOT
+    Servicos da aplicacao e o contrato de porta de cada um.
+
+    Cada chave gera um repositorio ECR (<project>/<servico>) e, no NLB interno,
+    um target group + listener na node_port informada. A node_port e a
+    NodePort fixa do Service do servico — mudar aqui exige mudar o manifesto
+    no repositorio do servico junto.
+  EOT
+  type = map(object({
+    node_port         = number
+    health_check_path = optional(string, "/actuator/health/readiness")
+  }))
+  default = {
+    orders       = { node_port = 30080 }
+    stock        = { node_port = 30081 }
+    billing      = { node_port = 30082 }
+    orchestrator = { node_port = 30083 }
+  }
+
+  validation {
+    condition     = alltrue([for s in values(var.services) : s.node_port >= 30000 && s.node_port <= 32767])
+    error_message = "Toda node_port precisa estar na faixa 30000-32767."
+  }
+
+  validation {
+    condition     = length(distinct([for s in values(var.services) : s.node_port])) == length(var.services)
+    error_message = "Cada servico precisa de uma node_port propria."
+  }
+}
+
 # ── ECR ──────────────────────────────────────────────────────────────────────
 
 variable "ecr_image_retention_count" {
