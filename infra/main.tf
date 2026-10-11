@@ -1,9 +1,10 @@
 # =============================================================================
 # Infraestrutura base da plataforma Mechanical Hub
 #
-# Escopo deste repositorio (ADR-0004): rede (VPC), cluster de execucao (EKS) e
-# registro de imagens (ECR). O banco de dados vive em `mechanical-hub-database`,
-# que le vpc_id / private_subnet_ids / private_subnet_cidrs do state daqui.
+# Escopo deste repositorio (ADR-0004): rede (VPC), cluster de execucao (EKS),
+# registro de imagens (ECR) e, desde a Fase 4, as filas SQS da saga. Os bancos
+# vivem em `mechanical-hub-database`, que le vpc_id / private_subnet_ids /
+# private_subnet_cidrs / storage_class_name do state daqui.
 # =============================================================================
 
 locals {
@@ -42,6 +43,17 @@ module "ecr" {
   services              = keys(var.services)
   image_retention_count = var.ecr_image_retention_count
   tags                  = local.common_tags
+}
+
+# ── Mensageria da saga (ADR-0006) ────────────────────────────────────────────
+
+module "sqs" {
+  source = "./modules/sqs"
+
+  project     = var.project
+  environment = var.environment
+  queues      = var.sqs_queues
+  tags        = local.common_tags
 }
 
 # ── Cluster ──────────────────────────────────────────────────────────────────

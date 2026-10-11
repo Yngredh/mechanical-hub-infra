@@ -170,6 +170,18 @@ variable "services" {
   }
 }
 
+# ── SQS (ADR-0006) ───────────────────────────────────────────────────────────
+
+variable "sqs_queues" {
+  description = <<-EOT
+    Filas FIFO da saga, cada uma com DLQ propria. As chaves sao contrato com
+    os servicos: aparecem como chaves dos outputs sqs_queue_urls,
+    sqs_queue_arns e sqs_dlq_urls.
+  EOT
+  type        = list(string)
+  default     = ["orders-commands", "stock-commands", "billing-commands", "orchestrator-events"]
+}
+
 # ── ECR ──────────────────────────────────────────────────────────────────────
 
 variable "ecr_image_retention_count" {

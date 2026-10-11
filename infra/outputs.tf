@@ -12,8 +12,8 @@
 #   - mechanical-hub-auth     : vpc_id, private_subnet_ids, app_nlb_arn,
 #                               app_backend_base_url
 #   - pipelines dos servicos  : eks_cluster_name, eks_cluster_endpoint,
-#     (orders, stock, billing,  ecr_repository_urls
-#      orchestrator)
+#     (orders, stock, billing,  ecr_repository_urls, sqs_queue_urls,
+#      orchestrator)            sqs_queue_arns, sqs_dlq_urls, otlp_*
 # =============================================================================
 
 # ── Rede ─────────────────────────────────────────────────────────────────────
@@ -109,6 +109,26 @@ output "ecr_repository_urls" {
 output "ecr_registry_id" {
   description = "ID da conta AWS que hospeda o registro ECR."
   value       = module.ecr.registry_id
+}
+
+# ── SQS (ADR-0006) ───────────────────────────────────────────────────────────
+#
+# Mapas indexados pela chave da fila: orders-commands, stock-commands,
+# billing-commands, orchestrator-events.
+
+output "sqs_queue_urls" {
+  description = "URL de cada fila FIFO da saga, por chave."
+  value       = module.sqs.queue_urls
+}
+
+output "sqs_queue_arns" {
+  description = "ARN de cada fila FIFO da saga, por chave."
+  value       = module.sqs.queue_arns
+}
+
+output "sqs_dlq_urls" {
+  description = "URL da DLQ de cada fila, por chave da fila de origem."
+  value       = module.sqs.dlq_urls
 }
 
 # ── NLB interno da aplicacao ──────────────────────────────────────────────────
