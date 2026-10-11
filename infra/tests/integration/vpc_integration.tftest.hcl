@@ -1,7 +1,8 @@
 # Testes de integracao do modulo VPC contra o LocalStack.
 #
 #   docker run --rm -d -p 4566:4566 localstack/localstack
-#   terraform test -filter=tests/integration/vpc_integration.tftest.hcl
+#   terraform init -test-directory=tests/integration
+#   terraform test -test-directory=tests/integration -filter=tests/integration/vpc_integration.tftest.hcl
 #
 # Nao rodam no CI: dependem de um LocalStack acessivel em localhost:4566.
 
@@ -34,7 +35,7 @@ run "vpc_is_created" {
   command = apply
 
   module {
-    source = "../../modules/vpc"
+    source = "./modules/vpc"
   }
 
   assert {
@@ -52,7 +53,7 @@ run "two_public_subnets_created" {
   command = apply
 
   module {
-    source = "../../modules/vpc"
+    source = "./modules/vpc"
   }
 
   assert {
@@ -65,7 +66,7 @@ run "two_private_subnets_created" {
   command = apply
 
   module {
-    source = "../../modules/vpc"
+    source = "./modules/vpc"
   }
 
   assert {

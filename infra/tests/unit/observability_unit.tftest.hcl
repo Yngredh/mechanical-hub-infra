@@ -1,12 +1,7 @@
 # Testes unitarios do modulo de observabilidade.
 # Usa mock_provider — nao exige credenciais AWS, cluster nem Helm.
-# Execute a partir de infra/: terraform test -filter=tests/unit/observability_unit.tftest.hcl
-
-mock_provider "aws" {
-  mock_resource "aws_eks_addon" {
-    defaults = { id = "mechanical-hub-production-eks:aws-ebs-csi-driver" }
-  }
-}
+# Execute a partir de infra/:
+#   terraform test -test-directory=tests/unit -filter=tests/unit/observability_unit.tftest.hcl
 
 mock_provider "helm" {
   mock_resource "helm_release" {
@@ -29,13 +24,22 @@ variables {
   cluster_name           = "mechanical-hub-production-eks"
   grafana_admin_password = "senha-de-teste-suficientemente-longa"
   tags                   = { ManagedBy = "terraform" }
+
+  services = {
+    orders       = { queue = "mechanical-hub-orders-commands.fifo", dlq = "mechanical-hub-orders-commands-dlq.fifo" }
+    stock        = { queue = "mechanical-hub-stock-commands.fifo", dlq = "mechanical-hub-stock-commands-dlq.fifo" }
+    billing      = { queue = "mechanical-hub-billing-commands.fifo", dlq = "mechanical-hub-billing-commands-dlq.fifo" }
+    orchestrator = { queue = "mechanical-hub-orchestrator-events.fifo", dlq = "mechanical-hub-orchestrator-events-dlq.fifo" }
+  }
+  queue_names = ["mechanical-hub-orders-commands.fifo", "mechanical-hub-orchestrator-events.fifo"]
+  dlq_names   = ["mechanical-hub-orders-commands-dlq.fifo", "mechanical-hub-orchestrator-events-dlq.fifo"]
 }
 
 run "stack_completa_e_planejada" {
   command = plan
 
   module {
-    source = "../../modules/observability"
+    source = "./modules/observability"
   }
 
   assert {
@@ -77,12 +81,14 @@ run "sem_dependencia_de_iam_no_caminho_padrao" {
   command = plan
 
   module {
-    source = "../../modules/observability"
+    source = "./modules/observability"
   }
 
+  # O CloudWatch entra pela cadeia padrao do SDK (LabRole dos nodes via IMDS),
+  # nunca por chave de acesso — as do Lab expiram a cada sessao.
   assert {
-    condition     = length(aws_eks_addon.ebs_csi_driver) == 0
-    error_message = "Nenhum recurso AWS deve ser criado no caminho padrao — a stack sobe sem tocar em IAM."
+    condition     = strcontains(helm_release.kube_prometheus_stack.values[0], "authType: default")
+    error_message = "A fonte CloudWatch precisa usar as credenciais da role dos nodes (authType: default)."
   }
 
   assert {
@@ -100,7 +106,7 @@ run "retencao_de_metricas_cobre_mais_de_um_dia" {
   command = plan
 
   module {
-    source = "../../modules/observability"
+    source = "./modules/observability"
   }
 
   # O painel de volume diario de OS exigido pela Fase 3 nao mostra tendencia
@@ -121,12 +127,33 @@ run "dashboards_viram_configmap_com_a_label_do_sidecar" {
   command = plan
 
   module {
-    source = "../../modules/observability"
+    source = "./modules/observability"
   }
 
   assert {
-    condition     = length(kubernetes_config_map.grafana_dashboards) == length(var.dashboard_files)
-    error_message = "Cada arquivo em dashboard_files precisa virar um ConfigMap."
+    condition     = length(kubernetes_config_map.grafana_dashboards) == length(var.dashboard_files) + length(var.services)
+    error_message = "Cada arquivo em dashboard_files e cada servico precisam virar um ConfigMap."
+  }
+
+  assert {
+    condition = alltrue([for s in keys(var.services) :
+      contains(keys(kubernetes_config_map.grafana_dashboards), "mechanical-hub-service-${s}.json")
+    ])
+    error_message = "Cada servico precisa do seu painel."
+  }
+
+  # Marcador esquecido = painel com consulta para uma fila chamada
+  # "__QUEUE__", vazio e sem erro.
+  assert {
+    condition = alltrue([for cm in kubernetes_config_map.grafana_dashboards :
+      alltrue([for v in values(cm.data) : !strcontains(v, "__SERVICE__") && !strcontains(v, "__QUEUE") && !strcontains(v, "__DLQ")])
+    ])
+    error_message = "Sobrou marcador (__SERVICE__, __QUEUE__, __DLQ__) sem substituir em algum painel."
+  }
+
+  assert {
+    condition     = strcontains(kubernetes_config_map.grafana_dashboards["mechanical-hub-service-orchestrator.json"].data["mechanical-hub-service-orchestrator.json"], "mechanical-hub-orchestrator-events-dlq.fifo")
+    error_message = "O painel do orchestrator precisa mostrar a DLQ da fila que ele consome."
   }
 
   # Sem esta label o sidecar do Grafana ignora o ConfigMap e o dashboard nunca
@@ -140,33 +167,49 @@ run "dashboards_viram_configmap_com_a_label_do_sidecar" {
   }
 }
 
-run "persistencia_ligada_provisiona_o_driver_de_volume" {
+# O driver EBS CSI mora no modulo eks desde a Fase 4; aqui so se confere que a
+# persistencia usa a StorageClass recebida.
+run "persistencia_ligada_usa_a_storage_class_gp3" {
   command = plan
 
   module {
-    source = "../../modules/observability"
+    source = "./modules/observability"
   }
 
   variables {
-    persistence_enabled  = true
-    manage_ebs_csi_addon = true
-  }
-
-  assert {
-    condition     = length(aws_eks_addon.ebs_csi_driver) == 1
-    error_message = "Com a persistencia ligada, o addon do driver EBS precisa ser criado."
-  }
-
-  # Sem IRSA de proposito: o driver usa o instance profile dos nodes (LabRole),
-  # porque o laboratorio nao deixa criar IAM role nova.
-  assert {
-    condition     = aws_eks_addon.ebs_csi_driver[0].service_account_role_arn == null
-    error_message = "O addon nao deve pedir IRSA — o laboratorio nega criacao de IAM role."
+    persistence_enabled = true
   }
 
   assert {
     condition     = strcontains(helm_release.loki.values[0], "enabled: true")
     error_message = "Com persistence_enabled, o Loki precisa pedir volume persistente."
+  }
+
+  assert {
+    condition     = strcontains(helm_release.kube_prometheus_stack.values[0], "storageClassName: gp3")
+    error_message = "O volume do Prometheus precisa usar a StorageClass gp3."
+  }
+}
+
+run "scrape_e_alertas_dos_servicos" {
+  command = plan
+
+  module {
+    source = "./modules/observability"
+  }
+
+  assert {
+    condition = alltrue([
+      strcontains(helm_release.kube_prometheus_stack.values[0], "metrics_path: /actuator/prometheus"),
+      strcontains(helm_release.kube_prometheus_stack.values[0], "regex: \"billing|orchestrator|orders|stock\""),
+      strcontains(helm_release.kube_prometheus_stack.values[0], "names: [\"production\"]"),
+    ])
+    error_message = "O scrape precisa cobrir /actuator/prometheus dos 4 servicos no namespace da aplicacao."
+  }
+
+  assert {
+    condition     = strcontains(helm_release.kube_prometheus_stack.values[0], "outbox_oldest_pending_age_seconds{namespace=\"production\"}) > 60")
+    error_message = "O alerta do outbox precisa disparar acima de 60 s (failure_handling.md §4)."
   }
 }
 
@@ -174,7 +217,7 @@ run "senha_curta_do_grafana_e_rejeitada" {
   command = plan
 
   module {
-    source = "../../modules/observability"
+    source = "./modules/observability"
   }
 
   variables {
@@ -188,7 +231,7 @@ run "node_port_fora_da_faixa_e_rejeitado" {
   command = plan
 
   module {
-    source = "../../modules/observability"
+    source = "./modules/observability"
   }
 
   variables {
