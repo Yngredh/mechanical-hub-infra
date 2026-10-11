@@ -3,16 +3,11 @@ variable "project" {
   type        = string
 }
 
-variable "environment" {
-  description = "Ambiente de implantacao (production, staging)."
-  type        = string
-}
-
 variable "queues" {
   description = <<-EOT
-    Chaves das filas. Cada uma gera <project>-<environment>-<chave>.fifo e a
-    DLQ <project>-<environment>-<chave>-dlq.fifo. As chaves sao o contrato com
-    os servicos (outputs sqs_*).
+    Chaves das filas. Cada uma gera <project>-<chave>.fifo e a DLQ
+    <project>-<chave>-dlq.fifo (infrastructure.md §3). As chaves sao o
+    contrato com os servicos (outputs sqs_*).
   EOT
   type        = list(string)
 
@@ -55,4 +50,10 @@ variable "max_receive_count" {
 variable "tags" {
   description = "Tags comuns aplicadas a todos os recursos do modulo."
   type        = map(string)
+}
+
+variable "dlq_alarms_enabled" {
+  description = "Cria um alarme do CloudWatch por DLQ (mensagens visiveis > 0 em 5 min)."
+  type        = bool
+  default     = true
 }

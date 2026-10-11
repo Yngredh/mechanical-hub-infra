@@ -200,12 +200,62 @@ variable "dashboard_files" {
     Arquivos JSON em dashboards/ publicados como ConfigMap para o sidecar do
     Grafana. Adicionar um dashboard = salvar o JSON exportado na pasta e
     incluir o nome do arquivo nesta lista.
+
+    Os marcadores __QUEUES__ e __DLQS__ no JSON sao trocados pelos nomes das
+    filas e DLQs (separados por virgula) antes de publicar.
   EOT
   type        = list(string)
   default = [
-    "mechanical-hub-service-orders.json",
-    "mechanical-hub-api.json",
+    "mechanical-hub-saga.json",
+    "mechanical-hub-auth.json",
   ]
+}
+
+variable "service_dashboard_template" {
+  description = <<-EOT
+    Arquivo em dashboards/ usado como modelo do painel de cada servico. E JSON
+    valido (o CI o valida como os demais) com os marcadores __SERVICE__,
+    __QUEUE__ e __DLQ__, trocados por servico ao publicar.
+  EOT
+  type        = string
+  default     = "mechanical-hub-service.json"
+}
+
+# ── Servicos da aplicacao (Fase 4) ───────────────────────────────────────────
+
+variable "services" {
+  description = <<-EOT
+    Servico -> fila que ele consome e a DLQ dela (nomes do SQS; vazio quando
+    nao ha). Cada chave gera um painel e entra no scrape de
+    /actuator/prometheus.
+
+    Contrato de scrape com os manifestos dos servicos: pod no namespace
+    var.app_namespace, com label app.kubernetes.io/name (ou app) igual a
+    chave, e porta de container chamada `http` ou numero 8080.
+  EOT
+  type = map(object({
+    queue = string
+    dlq   = string
+  }))
+  default = {}
+}
+
+variable "queue_names" {
+  description = "Nomes das filas SQS da saga, para o painel da saga (CloudWatch)."
+  type        = list(string)
+  default     = []
+}
+
+variable "dlq_names" {
+  description = "Nomes das DLQs SQS da saga, para o painel da saga (CloudWatch)."
+  type        = list(string)
+  default     = []
+}
+
+variable "aws_region" {
+  description = "Regiao padrao da fonte de dados CloudWatch do Grafana (onde estao as filas)."
+  type        = string
+  default     = "us-east-1"
 }
 
 # ── Limiares de alerta ───────────────────────────────────────────────────────
@@ -225,4 +275,13 @@ variable "alert_api_error_rate" {
     condition     = var.alert_api_error_rate > 0 && var.alert_api_error_rate < 1
     error_message = "alert_api_error_rate e uma fracao entre 0 e 1 (ex: 0.05 = 5%)."
   }
+}
+
+variable "alert_outbox_pending_age_seconds" {
+  description = <<-EOT
+    Idade, em segundos, da linha PENDING mais antiga do outbox a partir da
+    qual o alerta dispara (failure_handling.md §4: 60 s).
+  EOT
+  type        = number
+  default     = 60
 }

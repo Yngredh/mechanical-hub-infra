@@ -25,9 +25,13 @@
 #      momento do *plan*, o que quebra o primeiro apply (a CRD so nasce com o
 #      chart). `additionalPrometheusRulesMap` resolve isso sem ordenacao.
 #
-# Dimensionamento: os requests/limits abaixo sao apertados de proposito para
-# caber em nodes t3.medium ao lado da aplicacao. Somados, os requests deste
-# modulo ficam em torno de 0,6 vCPU e 1,8 GiB.
+# Dimensionamento (revisto na Fase 4): o cluster e 3 x t3.large (6 vCPU,
+# 24 GiB) e divide espaco com os 4 servicos (~1 vCPU / 3 GiB de requests,
+# HPA de 1 a 2 replicas) e o MongoDB (~0,25 vCPU / 0,75 GiB). Somados, os
+# requests deste modulo ficam em torno de 0,7 vCPU e 2,1 GiB — o Prometheus
+# subiu porque agora raspa 4 servicos em vez de 1. O total do cluster fica
+# perto de 2,5 vCPU / 7 GiB, menos da metade do alocavel, o que deixa espaco
+# para o HPA dobrar os servicos e para um node sair durante uma atualizacao.
 # =============================================================================
 
 locals {
@@ -57,6 +61,30 @@ locals {
   prometheus_datasource_uid = "mh-prometheus"
   loki_datasource_uid       = "mh-loki"
   tempo_datasource_uid      = "mh-tempo"
+  cloudwatch_datasource_uid = "mh-cloudwatch"
+
+  # Regex dos servicos no scrape e nas regras (ex.: orders|stock|billing).
+  # Vazio vira um regex que nao casa com nada, em vez de casar com tudo.
+  service_regex = length(var.services) > 0 ? join("|", sort(keys(var.services))) : "$^"
+
+  # Paineis: os arquivos estaticos recebem a lista de filas; o modelo de
+  # servico vira um painel por servico.
+  static_dashboards = {
+    for f in var.dashboard_files : f => replace(replace(
+      file("${path.module}/dashboards/${f}"),
+      "__QUEUES__", join(",", var.queue_names)),
+    "__DLQS__", join(",", var.dlq_names))
+  }
+
+  service_dashboards = {
+    for s, q in var.services : "mechanical-hub-service-${s}.json" => replace(replace(replace(
+      file("${path.module}/dashboards/${var.service_dashboard_template}"),
+      "__SERVICE__", s),
+      "__QUEUE__", q.queue),
+    "__DLQ__", q.dlq)
+  }
+
+  dashboards = merge(local.static_dashboards, local.service_dashboards)
 
   labels = {
     "app.kubernetes.io/part-of"    = var.project
@@ -110,9 +138,13 @@ resource "helm_release" "kube_prometheus_stack" {
       prometheus_datasource_uid = local.prometheus_datasource_uid
       loki_datasource_uid       = local.loki_datasource_uid
       tempo_datasource_uid      = local.tempo_datasource_uid
+      cloudwatch_datasource_uid = local.cloudwatch_datasource_uid
+      aws_region                = var.aws_region
       alert_latency_seconds     = var.alert_api_latency_seconds
       alert_error_rate          = var.alert_api_error_rate
+      alert_outbox_age_seconds  = var.alert_outbox_pending_age_seconds
       app_namespace             = var.app_namespace
+      service_regex             = local.service_regex
     })
   ]
 }
@@ -242,13 +274,14 @@ resource "helm_release" "otel_logs_agent" {
 #
 # Para adicionar um dashboard: exporte o JSON pela UI do Grafana
 # (Dashboard settings -> JSON Model), salve em dashboards/ e adicione o nome
-# do arquivo ao for_each. Nada mais.
+# do arquivo a var.dashboard_files. O painel de cada servico sai de um modelo
+# unico (var.service_dashboard_template), um ConfigMap por servico.
 
 resource "kubernetes_config_map" "grafana_dashboards" {
-  for_each = toset(var.dashboard_files)
+  for_each = local.dashboards
 
   metadata {
-    name      = "grafana-dashboard-${trimsuffix(each.value, ".json")}"
+    name      = "grafana-dashboard-${trimsuffix(each.key, ".json")}"
     namespace = kubernetes_namespace.observability.metadata[0].name
 
     labels = merge(local.labels, {
@@ -257,7 +290,7 @@ resource "kubernetes_config_map" "grafana_dashboards" {
   }
 
   data = {
-    (each.value) = file("${path.module}/dashboards/${each.value}")
+    (each.key) = each.value
   }
 
   depends_on = [helm_release.kube_prometheus_stack]

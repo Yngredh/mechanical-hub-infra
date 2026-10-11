@@ -14,6 +14,13 @@ locals {
     Environment = var.environment
     ManagedBy   = "terraform"
   }
+
+  # Fila que cada servico consome (infrastructure.md §3): o orchestrator le
+  # os eventos, os demais leem os proprios comandos. Alimenta o painel de cada
+  # servico; servico sem fila correspondente fica com o painel de fila vazio.
+  service_consumed_queue = {
+    for s in keys(var.services) : s => s == "orchestrator" ? "orchestrator-events" : "${s}-commands"
+  }
 }
 
 data "aws_iam_role" "lab_role" {
@@ -50,10 +57,9 @@ module "ecr" {
 module "sqs" {
   source = "./modules/sqs"
 
-  project     = var.project
-  environment = var.environment
-  queues      = var.sqs_queues
-  tags        = local.common_tags
+  project = var.project
+  queues  = var.sqs_queues
+  tags    = local.common_tags
 }
 
 # ── Cluster ──────────────────────────────────────────────────────────────────
@@ -145,6 +151,17 @@ module "observability" {
   storage_class          = coalesce(module.eks.storage_class_name, "gp2")
   otlp_http_node_port    = var.observability_otlp_http_node_port
   tags                   = local.common_tags
+
+  # Fase 4: scrape e paineis por servico, painel da saga com as filas.
+  aws_region = var.aws_region
+  services = {
+    for s, q in local.service_consumed_queue : s => {
+      queue = lookup(module.sqs.queue_names, q, "")
+      dlq   = lookup(module.sqs.dlq_names, q, "")
+    }
+  }
+  queue_names = values(module.sqs.queue_names)
+  dlq_names   = values(module.sqs.dlq_names)
 
   # Sem isto, o Terraform tentaria instalar os charts assim que o endpoint do
   # cluster existisse — antes de haver node capaz de agendar os pods.

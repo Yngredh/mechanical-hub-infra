@@ -18,7 +18,10 @@
 # =============================================================================
 
 locals {
-  name_prefix = "${var.project}-${var.environment}"
+  # Sem o ambiente no nome, de proposito: os nomes sao os de
+  # infrastructure.md §3 (mechanical-hub-<chave>.fifo), que os servicos
+  # conhecem. O AWS Academy tem um ambiente so por conta.
+  name_prefix = var.project
 }
 
 # ── DLQs ─────────────────────────────────────────────────────────────────────
@@ -74,4 +77,36 @@ resource "aws_sqs_queue_redrive_allow_policy" "dlq" {
     redrivePermission = "byQueue"
     sourceQueueArns   = [aws_sqs_queue.this[each.key].arn]
   })
+}
+
+# ── Alerta: mensagem em DLQ ──────────────────────────────────────────────────
+#
+# Mensagem na DLQ = um passo da saga parou depois de 6 tentativas e a saga
+# daquele pedido esta travada ate alguem agir (failure_handling.md §3). O
+# alerta fica no CloudWatch, e nao no Prometheus, porque a profundidade da fila
+# so existe la; o Grafana mostra os mesmos numeros pela fonte CloudWatch.
+#
+# Sem alarm_actions: assim como o Alertmanager, ainda nao ha canal de
+# notificacao escolhido. O alarme aparece em ALARM no console e no painel.
+
+resource "aws_cloudwatch_metric_alarm" "dlq_not_empty" {
+  for_each = var.dlq_alarms_enabled ? toset(var.queues) : toset([])
+
+  alarm_name        = "${aws_sqs_queue.dlq[each.key].name}-nao-vazia"
+  alarm_description = "Mensagem na DLQ de ${each.key}: a saga do pedido esta parada. Investigar e fazer redrive pelo console."
+
+  namespace           = "AWS/SQS"
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  dimensions          = { QueueName = aws_sqs_queue.dlq[each.key].name }
+  statistic           = "Maximum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+
+  # A metrica do SQS some quando a fila fica ociosa por horas; sem dado nao e
+  # sinal de problema.
+  treat_missing_data = "notBreaching"
+
+  tags = merge(var.tags, { Queue = each.key })
 }

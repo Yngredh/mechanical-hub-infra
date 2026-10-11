@@ -1,8 +1,9 @@
 # Values do kube-prometheus-stack — gerado por Terraform (templatefile).
 # Nao editar no cluster: qualquer alteracao manual e desfeita no proximo apply.
 #
-# Os requests/limits sao apertados de proposito: a stack inteira divide nodes
-# t3.medium com a aplicacao. Ver o cabecalho de modules/observability/main.tf.
+# Os requests/limits sao contidos de proposito: a stack divide os nodes
+# t3.large com os 4 servicos e o MongoDB. Ver o cabecalho de
+# modules/observability/main.tf.
 
 fullnameOverride: kube-prometheus-stack
 
@@ -32,6 +33,48 @@ prometheus:
     probeSelectorNilUsesHelmValues: false
     scrapeConfigSelectorNilUsesHelmValues: false
 
+    # Scrape do /actuator/prometheus dos servicos da Fase 4. Fica aqui, e nao
+    # em ServiceMonitor nos repositorios dos servicos, para que um painel nunca
+    # fique vazio porque um servico esqueceu o manifesto de monitoramento.
+    #
+    # Contrato com os manifestos: pod no namespace da aplicacao, label
+    # app.kubernetes.io/name (ou app) com o nome do servico, e porta de
+    # container chamada `http` ou numero 8080. O label `service` das series
+    # e o nome do servico — e por ele que paineis e alertas filtram.
+    additionalScrapeConfigs:
+      - job_name: mechanical-hub-services
+        metrics_path: /actuator/prometheus
+        scrape_interval: 30s
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ["${app_namespace}"]
+        relabel_configs:
+          # Nome do servico: app.kubernetes.io/name, ou `app` se o primeiro
+          # nao existir.
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: __tmp_service
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            regex: (.+)
+            target_label: __tmp_service
+          - source_labels: [__tmp_service]
+            regex: "${service_regex}"
+            action: keep
+          # Um alvo por pod: so a porta HTTP da aplicacao.
+          - source_labels: [__meta_kubernetes_pod_container_port_name, __meta_kubernetes_pod_container_port_number]
+            separator: ";"
+            regex: "http;.*|.*;8080"
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_phase]
+            regex: Running
+            action: keep
+          - source_labels: [__tmp_service]
+            target_label: service
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
 %{ if persistence_enabled ~}
     storageSpec:
       volumeClaimTemplate:
@@ -43,13 +86,15 @@ prometheus:
               storage: ${prometheus_storage_size}
 %{ endif ~}
 
+    # Subiu na Fase 4: 4 servicos raspados em vez de 1 multiplicam as series
+    # (JVM, HTTP, outbox, saga).
     resources:
       requests:
-        cpu: 200m
-        memory: 768Mi
+        cpu: 300m
+        memory: 1Gi
       limits:
-        cpu: 800m
-        memory: 1536Mi
+        cpu: "1"
+        memory: 2Gi
 
 # ── Alertmanager ─────────────────────────────────────────────────────────────
 #
@@ -171,6 +216,20 @@ grafana:
         nodeGraph:
           enabled: true
 
+    # Profundidade das filas e DLQs do SQS (ApproximateNumberOfMessagesVisible).
+    # Essas metricas so existem no CloudWatch — o Prometheus nao as enxerga.
+    #
+    # authType default = cadeia padrao do SDK da AWS, que no pod cai nas
+    # credenciais da LabRole dos nodes pelo IMDS (hop limit 2, modulo eks).
+    # Nenhuma chave em secret: as do Lab expiram a cada sessao.
+    - name: CloudWatch
+      uid: ${cloudwatch_datasource_uid}
+      type: cloudwatch
+      access: proxy
+      jsonData:
+        authType: default
+        defaultRegion: ${aws_region}
+
 # ── Exporters de infraestrutura ──────────────────────────────────────────────
 #
 # Origem das metricas de CPU/memoria do Kubernetes exigidas pela fase:
@@ -226,8 +285,8 @@ kubeEtcd:
 # porque aquele recurso exige a CRD ja instalada no momento do plan — o que
 # quebraria o primeiro apply, quando a CRD ainda nao existe.
 #
-# As metricas `mechanical_hub_*` sao o contrato de instrumentacao com a
-# aplicacao (etapa 2 do plano). Ate a aplicacao publica-las, estas regras
+# As metricas `mechanical_hub_*`, `outbox_*` e `saga_*` sao o contrato de
+# instrumentacao com os servicos. Ate os servicos publica-las, estas regras
 # simplesmente nao disparam.
 
 additionalPrometheusRulesMap:
@@ -266,40 +325,63 @@ additionalPrometheusRulesMap:
             expr: |
               histogram_quantile(
                 0.95,
-                sum by (le, uri) (rate(http_server_requests_seconds_bucket{namespace="${app_namespace}"}[5m]))
+                sum by (le, service, uri) (rate(http_server_requests_seconds_bucket{namespace="${app_namespace}"}[5m]))
               ) > ${alert_latency_seconds}
             for: 10m
             labels:
               severity: warning
               component: api
             annotations:
-              summary: "Latencia p95 acima do limite em {{ $labels.uri }}"
-              description: "p95 de {{ $value | humanizeDuration }} em {{ $labels.uri }} nos ultimos 5 minutos."
+              summary: "Latencia p95 acima do limite em {{ $labels.service }} {{ $labels.uri }}"
+              description: "p95 de {{ $value | humanizeDuration }} em {{ $labels.service }} {{ $labels.uri }} nos ultimos 5 minutos."
 
           - alert: MechanicalHubTaxaDeErroAlta
             expr: |
-              sum(rate(http_server_requests_seconds_count{namespace="${app_namespace}", status=~"5.."}[5m]))
+              sum by (service) (rate(http_server_requests_seconds_count{namespace="${app_namespace}", status=~"5.."}[5m]))
                 /
-              clamp_min(sum(rate(http_server_requests_seconds_count{namespace="${app_namespace}"}[5m])), 0.001)
+              clamp_min(sum by (service) (rate(http_server_requests_seconds_count{namespace="${app_namespace}"}[5m])), 0.001)
                 > ${alert_error_rate}
             for: 5m
             labels:
               severity: critical
               component: api
             annotations:
-              summary: "Taxa de erro 5xx acima do limite"
-              description: "{{ $value | humanizePercentage }} das respostas da API sao 5xx nos ultimos 5 minutos."
+              summary: "Taxa de erro 5xx acima do limite em {{ $labels.service }}"
+              description: "{{ $value | humanizePercentage }} das respostas de {{ $labels.service }} sao 5xx nos ultimos 5 minutos."
 
-          - alert: MechanicalHubAplicacaoIndisponivel
+          # Um alerta por servico: com 4 Deployments, somar tudo esconderia um
+          # servico inteiro fora do ar enquanto os outros 3 respondem.
+          - alert: MechanicalHubServicoIndisponivel
             expr: |
-              sum(kube_deployment_status_replicas_available{namespace="${app_namespace}", deployment=~".*mechanical-hub.*"}) == 0
+              sum by (deployment) (kube_deployment_status_replicas_available{namespace="${app_namespace}", deployment=~".*(${service_regex}).*"}) == 0
             for: 3m
             labels:
               severity: critical
               component: api
             annotations:
-              summary: "Aplicacao principal sem replicas disponiveis"
-              description: "Nenhum pod pronto para atender no namespace ${app_namespace}."
+              summary: "{{ $labels.deployment }} sem replicas disponiveis"
+              description: "Nenhum pod pronto de {{ $labels.deployment }} no namespace ${app_namespace}."
+
+      # Saga e outbox (Fase 4). As metricas vem dos servicos: outbox_* de todos
+      # os 4, saga_* do orchestrator. O alerta de DLQ nao esta aqui: a
+      # profundidade das filas so existe no CloudWatch, onde fica o alarme
+      # (modulo sqs).
+      - name: mechanical-hub-saga
+        rules:
+          # Linha PENDING antiga no outbox = o relay parou de publicar (fila
+          # inacessivel, lider travado). A saga daquele pedido nao anda ate
+          # isso ser resolvido; nada e perdido, mas nada avanca
+          # (failure_handling.md §4).
+          - alert: MechanicalHubOutboxPendente
+            expr: |
+              max by (service) (outbox_oldest_pending_age_seconds{namespace="${app_namespace}"}) > ${alert_outbox_age_seconds}
+            for: 1m
+            labels:
+              severity: critical
+              component: outbox
+            annotations:
+              summary: "Outbox de {{ $labels.service }} com mensagem pendente ha mais de ${alert_outbox_age_seconds} s"
+              description: "A linha PENDING mais antiga do outbox de {{ $labels.service }} tem {{ $value | humanizeDuration }}. O relay nao esta publicando."
 
       - name: mechanical-hub-autenticacao
         rules:
