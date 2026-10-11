@@ -65,20 +65,30 @@ variable "eks_cluster_version" {
 }
 
 variable "eks_node_instance_type" {
-  description = "Tipo de instancia EC2 dos nodes do EKS."
+  description = <<-EOT
+    Tipo de instancia EC2 dos nodes do EKS.
+
+    t3.large (2 vCPU, 8 GiB) desde a Fase 4: os 4 servicos, o MongoDB e a
+    stack de observabilidade nao cabem em t3.medium (4 GiB). O AWS Academy Lab
+    limita a conta a 9 instancias e 32 vCPU — ver a validacao de
+    eks_node_max_size.
+  EOT
   type        = string
-  default     = "t3.medium"
+  default     = "t3.large"
+
+  validation {
+    condition     = contains(["t3.medium", "t3.large"], var.eks_node_instance_type)
+    error_message = "Use t3.medium ou t3.large: tipos maiores estouram o limite de vCPU do AWS Academy Lab."
+  }
 }
 
 variable "eks_node_desired_size" {
   description = <<-EOT
     Quantidade desejada de nodes.
 
-    Passou de 2 para 3 quando a stack de observabilidade entrou (RFC-0004):
-    Prometheus, Loki, Tempo, Grafana e o coletor somam cerca de 0,6 vCPU e
-    1,8 GiB apenas em requests, e passariam a disputar espaco com a aplicacao
-    e com o HPA em dois t3.medium. Voltar para 2 e uma linha — mas espere pods
-    em Pending quando a aplicacao escalar.
+    Passou de 2 para 3 quando a stack de observabilidade entrou (RFC-0004) e
+    continua 3 na Fase 4, agora em t3.large: 6 vCPU e 24 GiB para os 4
+    servicos, o MongoDB e a observabilidade.
   EOT
   type        = number
   default     = 3
@@ -91,9 +101,40 @@ variable "eks_node_min_size" {
 }
 
 variable "eks_node_max_size" {
-  description = "Quantidade maxima de nodes."
+  description = <<-EOT
+    Quantidade maxima de nodes. O AWS Academy Lab aceita no maximo 9
+    instancias e 32 vCPU na conta; 5 x t3.large (10 vCPU) deixa folga para o
+    que roda fora do cluster.
+  EOT
   type        = number
   default     = 5
+
+  validation {
+    condition     = var.eks_node_max_size <= 9 && var.eks_node_max_size * 2 <= 32
+    error_message = "eks_node_max_size passa do limite do AWS Academy Lab (9 instancias, 32 vCPU)."
+  }
+}
+
+variable "eks_node_metadata_hop_limit" {
+  description = <<-EOT
+    Hop limit do IMDSv2 nos nodes. Precisa ser >= 2: os pods leem as
+    credenciais da LabRole pelo IMDS para falar com SQS e EBS.
+  EOT
+  type        = number
+  default     = 2
+}
+
+variable "eks_ebs_csi_enabled" {
+  description = <<-EOT
+    Instala o addon aws-ebs-csi-driver (sem IRSA, usando a LabRole dos nodes)
+    e a StorageClass gp3 (WaitForFirstConsumer). E o que da volume ao MongoDB
+    do mechanical-hub-database e, opcionalmente, a observabilidade.
+
+    Se o driver falhar por permissao no Lab, desligue: o MongoDB passa a usar
+    armazenamento efemero e storage_class_name vira nulo.
+  EOT
+  type        = bool
+  default     = true
 }
 
 # ── Servicos da aplicacao (Fase 4, ADR-0005) ─────────────────────────────────
@@ -231,20 +272,8 @@ variable "observability_persistence_enabled" {
     historico nao sobrevive a um reset do ambiente; o que sobrevive e a
     configuracao, que e codigo.
 
-    Ligar exige uma StorageClass funcional — ver
-    var.observability_manage_ebs_csi_addon.
-  EOT
-  type        = bool
-  default     = false
-}
-
-variable "observability_manage_ebs_csi_addon" {
-  description = <<-EOT
-    Instala o addon aws-ebs-csi-driver, necessario para PersistentVolumeClaims
-    a partir do Kubernetes 1.27 (o provisionador EBS in-tree deixou de
-    existir). Criado sem IRSA: o driver usa o instance profile dos nodes.
-
-    So faz sentido junto com var.observability_persistence_enabled = true.
+    Ligar exige o driver EBS CSI — ver var.eks_ebs_csi_enabled. Os volumes
+    usam a StorageClass gp3 criada pelo modulo eks.
   EOT
   type        = bool
   default     = false

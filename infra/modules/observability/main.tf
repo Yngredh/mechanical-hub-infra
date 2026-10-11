@@ -6,7 +6,8 @@
 #
 # Decisoes que vem da RFC e nao devem ser revertidas sem revisa-la:
 #
-#   1. Armazenamento local (emptyDir por padrao, PVC opcional) em vez de S3.
+#   1. Armazenamento local (emptyDir por padrao, PVC opcional na StorageClass
+#      gp3 do modulo eks) em vez de S3.
 #      Loki e Tempo em modo S3 exigiriam uma IAM role via IRSA — exatamente o
 #      guardrail do AWS Academy Lab que ja derrubou o AWS Load Balancer
 #      Controller (ver modules/app-lb/main.tf). Nenhum recurso deste modulo
@@ -260,28 +261,4 @@ resource "kubernetes_config_map" "grafana_dashboards" {
   }
 
   depends_on = [helm_release.kube_prometheus_stack]
-}
-
-# ── Driver de volume (opcional) ──────────────────────────────────────────────
-#
-# So entra em cena quando var.persistence_enabled = true. A partir do
-# Kubernetes 1.27 o provisionador EBS in-tree deixou de existir: sem o driver
-# CSI instalado, qualquer PersistentVolumeClaim fica pendente para sempre.
-#
-# O addon e criado SEM service_account_role_arn de proposito — assim o driver
-# usa as credenciais do instance profile dos nodes (a LabRole), em vez de uma
-# IAM role via IRSA, que o Lab nao deixa criar. Se ainda assim falhar por
-# permissao, o caminho e voltar var.persistence_enabled para false: o
-# armazenamento volta a ser efemero e a stack sobe do mesmo jeito.
-
-resource "aws_eks_addon" "ebs_csi_driver" {
-  count = var.manage_ebs_csi_addon ? 1 : 0
-
-  cluster_name = var.cluster_name
-  addon_name   = "aws-ebs-csi-driver"
-
-  resolve_conflicts_on_create = "OVERWRITE"
-  resolve_conflicts_on_update = "OVERWRITE"
-
-  tags = var.tags
 }

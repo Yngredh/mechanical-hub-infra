@@ -6,7 +6,9 @@
 #
 # Consumidores:
 #   - mechanical-hub-database : vpc_id, private_subnet_ids, private_subnet_cidrs,
-#                               vpc_cidr (fallback), eks_cluster_security_group_id
+#                               vpc_cidr (fallback), eks_cluster_security_group_id,
+#                               eks_cluster_name, eks_cluster_endpoint,
+#                               eks_cluster_ca_certificate, storage_class_name
 #   - mechanical-hub-auth     : vpc_id, private_subnet_ids, app_nlb_arn,
 #                               app_backend_base_url
 #   - pipelines dos servicos  : eks_cluster_name, eks_cluster_endpoint,
@@ -82,6 +84,16 @@ output "eks_node_security_group_id" {
 output "eks_cluster_ca_certificate" {
   description = "Certificado da CA do cluster, em base64. Usado para montar o kubeconfig."
   value       = module.eks.cluster_ca_certificate
+}
+
+output "storage_class_name" {
+  description = <<-EOT
+    StorageClass gp3 (driver EBS CSI, WaitForFirstConsumer) para volumes
+    persistentes — consumida pelo MongoDB do mechanical-hub-database. Nulo
+    quando eks_ebs_csi_enabled = false: o consumidor cai para armazenamento
+    efemero.
+  EOT
+  value       = module.eks.storage_class_name
 }
 
 # ── ECR ──────────────────────────────────────────────────────────────────────

@@ -60,6 +60,17 @@ module "eks" {
   node_max_size      = var.eks_node_max_size
   lab_role_arn       = data.aws_iam_role.lab_role.arn
   tags               = local.common_tags
+
+  node_metadata_hop_limit = var.eks_node_metadata_hop_limit
+  ebs_csi_enabled         = var.eks_ebs_csi_enabled
+}
+
+# O addon do driver EBS CSI morava no modulo de observabilidade, desligado por
+# padrao. Se algum ambiente o tinha ligado, o state acompanha a mudanca em vez
+# de destruir e recriar o driver.
+moved {
+  from = module.observability[0].aws_eks_addon.ebs_csi_driver[0]
+  to   = module.eks.aws_eks_addon.ebs_csi_driver[0]
 }
 
 # ── NLB interno da aplicacao ─────────────────────────────────────────────────
@@ -118,7 +129,7 @@ module "observability" {
   logs_retention         = var.observability_logs_retention
   traces_retention       = var.observability_traces_retention
   persistence_enabled    = var.observability_persistence_enabled
-  manage_ebs_csi_addon   = var.observability_manage_ebs_csi_addon
+  storage_class          = coalesce(module.eks.storage_class_name, "gp2")
   otlp_http_node_port    = var.observability_otlp_http_node_port
   tags                   = local.common_tags
 

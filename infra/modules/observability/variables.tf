@@ -10,8 +10,7 @@ variable "environment" {
 
 variable "cluster_name" {
   description = <<-EOT
-    Nome do cluster EKS. Usado como label `cluster` na telemetria e como alvo
-    do addon do driver EBS, quando habilitado.
+    Nome do cluster EKS. Usado como label `cluster` na telemetria.
   EOT
   type        = string
 }
@@ -143,30 +142,17 @@ variable "persistence_enabled" {
     e a configuracao, que e codigo).
 
     Ligar exige uma StorageClass funcional no cluster. A partir do Kubernetes
-    1.27 isso significa o driver EBS CSI instalado — ver
-    var.manage_ebs_csi_addon.
-  EOT
-  type        = bool
-  default     = false
-}
-
-variable "manage_ebs_csi_addon" {
-  description = <<-EOT
-    Instala o addon aws-ebs-csi-driver no cluster, sem IRSA (o driver usa o
-    instance profile dos nodes). So faz sentido junto com
-    var.persistence_enabled = true.
-
-    Falso por padrao para nao introduzir, no caminho comum, uma dependencia
-    que pode esbarrar nos guardrails de IAM do laboratorio.
+    1.27 isso significa o driver EBS CSI instalado — desde a Fase 4 ele faz
+    parte do modulo eks (var.storage_class recebe a classe criada la).
   EOT
   type        = bool
   default     = false
 }
 
 variable "storage_class" {
-  description = "StorageClass usada pelos PVCs quando var.persistence_enabled = true."
+  description = "StorageClass usada pelos PVCs quando var.persistence_enabled = true. Vem do modulo eks."
   type        = string
-  default     = "gp2"
+  default     = "gp3"
 }
 
 variable "prometheus_storage_size" {

@@ -53,3 +53,8 @@ output "node_group_autoscaling_group_name" {
   EOT
   value       = aws_eks_node_group.this.resources[0].autoscaling_groups[0].name
 }
+
+output "storage_class_name" {
+  description = "StorageClass gp3 do driver EBS CSI, ou nulo quando o driver esta desligado."
+  value       = try(kubernetes_storage_class_v1.gp3[0].metadata[0].name, null)
+}
