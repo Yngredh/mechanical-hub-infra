@@ -33,11 +33,16 @@ eks_ebs_csi_enabled = true
 ecr_image_retention_count = 10
 
 # --- NLB interno da aplicacao -------------------------------------------------
-# Contrato de porta com o mechanical-hub: o Service la expoe NodePort neste
-# valor. Mudar aqui exige mudar o manifest k8s junto.
-app_node_port         = 30080
-app_health_check_path = "/actuator/health/readiness"
-app_namespace         = "production"
+# Contrato de porta com cada servico: o Service expoe NodePort neste valor, e
+# o NLB tem um listener na mesma porta. Mudar aqui exige mudar o manifesto do
+# servico junto. health_check_path e opcional (padrao: readiness do actuator).
+services = {
+  orders       = { node_port = 30080 }
+  stock        = { node_port = 30081 }
+  billing      = { node_port = 30082 }
+  orchestrator = { node_port = 30083 }
+}
+app_namespace = "production"
 
 # --- Observabilidade (RFC-0004) ----------------------------------------------
 # OpenTelemetry + Prometheus + Loki + Tempo + Grafana, instalados no cluster.

@@ -10,7 +10,7 @@
 #                               eks_cluster_name, eks_cluster_endpoint,
 #                               eks_cluster_ca_certificate, storage_class_name
 #   - mechanical-hub-auth     : vpc_id, private_subnet_ids, app_nlb_arn,
-#                               app_backend_base_url
+#                               app_backend_base_urls, otlp_vpc_endpoint
 #   - pipelines dos servicos  : eks_cluster_name, eks_cluster_endpoint,
 #     (orders, stock, billing,  ecr_repository_urls, sqs_queue_urls,
 #      orchestrator)            sqs_queue_arns, sqs_dlq_urls, otlp_*
@@ -138,14 +138,14 @@ output "app_nlb_arn" {
   value       = module.app_lb.nlb_arn
 }
 
-output "app_backend_base_url" {
+output "app_backend_base_urls" {
   description = <<-EOT
-    URL base ja composta (DNS do NLB + porta do NodePort) para as integracoes
-    HTTP_PROXY via VPC Link do mechanical-hub-auth. Mesmo espirito do
-    ecr_repository_url: o consumidor le um valor pronto, sem montar
-    host:porta na mao a partir de outputs separados.
+    URL base ja composta (DNS do NLB + NodePort) de cada servico, para as
+    integracoes HTTP_PROXY via VPC Link do mechanical-hub-auth. Substitui o
+    antigo app_backend_base_url: o consumidor le um valor pronto por servico,
+    sem montar host:porta na mao. O VPC Link continua um so (app_nlb_arn).
   EOT
-  value       = "http://${module.app_lb.nlb_dns_name}:${var.app_node_port}"
+  value       = module.app_lb.backend_base_urls
 }
 
 # ── Observabilidade (RFC-0004) ───────────────────────────────────────────────

@@ -8,9 +8,14 @@ output "nlb_dns_name" {
   value       = aws_lb.app.dns_name
 }
 
-output "target_group_arn" {
-  description = "Target group anexado ao NLB, atrelado a ASG dos nodes do EKS."
-  value       = aws_lb_target_group.app.arn
+output "target_group_arns" {
+  description = "Target group de cada servico, atrelado a ASG dos nodes do EKS."
+  value       = { for s, tg in aws_lb_target_group.app : s => tg.arn }
+}
+
+output "backend_base_urls" {
+  description = "URL base (DNS do NLB + porta) de cada servico, para as integracoes via VPC Link."
+  value       = { for s, cfg in var.services : s => "http://${aws_lb.app.dns_name}:${cfg.node_port}" }
 }
 
 output "otlp_backend_url" {

@@ -190,27 +190,14 @@ variable "ecr_image_retention_count" {
   default     = 10
 }
 
-# ── NLB interno da aplicacao ─────────────────────────────────────────────────
+# ── Aplicacao ────────────────────────────────────────────────────────────────
 #
-# Contrato de porta com o repositorio mechanical-hub: o Service da aplicacao
-# expoe type: NodePort nesta porta fixa. Mudar aqui exige mudar la junto.
-
-variable "app_node_port" {
-  description = "NodePort fixo do Service da aplicacao (mechanical-hub). Contrato entre os dois repositorios."
-  type        = number
-  default     = 30080
-}
-
-variable "app_health_check_path" {
-  description = "Path HTTP verificado pelo health check do target group do NLB, na porta app_node_port."
-  type        = string
-  default     = "/actuator/health/readiness"
-}
+# O contrato de porta de cada servico com o NLB interno esta em var.services.
 
 variable "app_namespace" {
   description = <<-EOT
-    Namespace onde a aplicacao principal (mechanical-hub) roda. As regras de
-    alerta e os paineis de infraestrutura olham para os pods deste namespace.
+    Namespace onde os servicos da aplicacao rodam. As regras de alerta e os
+    paineis olham para os pods deste namespace.
   EOT
   type        = string
   default     = "production"
