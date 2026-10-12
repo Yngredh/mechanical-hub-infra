@@ -1,8 +1,14 @@
 # Valida a restricao de regiao do modulo raiz. Sem credenciais AWS: os
 # provedores sao substituidos por mocks.
-# Execute a partir de infra/: terraform test -filter=tests/unit/region_unit.tftest.hcl
+# Execute a partir de infra/:
+#   terraform test -test-directory=tests/unit -filter=tests/unit/region_unit.tftest.hcl
 
-mock_provider "aws" {}
+mock_provider "aws" {
+  # O aws_eks_cluster valida o formato do role_arn ja no plan.
+  mock_data "aws_iam_role" {
+    defaults = { arn = "arn:aws:iam::123456789012:role/LabRole" }
+  }
+}
 mock_provider "helm" {}
 mock_provider "kubernetes" {}
 

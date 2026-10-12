@@ -9,7 +9,7 @@ variable "environment" {
 }
 
 variable "vpc_id" {
-  description = "VPC onde o NLB e o target group sao criados."
+  description = "VPC onde o NLB e os target groups sao criados."
   type        = string
 }
 
@@ -23,24 +23,35 @@ variable "private_subnet_cidrs" {
   type        = list(string)
 }
 
-variable "node_security_group_id" {
-  description = "Security group dos nodes do EKS, onde a regra de ingress do NodePort e criada."
+variable "cluster_security_group_id" {
+  description = <<-EOT
+    Cluster security group gerenciado pelo EKS — o que fica anexado aos nodes.
+    E nele que as regras de entrada das NodePorts sao criadas.
+  EOT
   type        = string
 }
 
 variable "autoscaling_group_name" {
-  description = "ASG que sustenta o node group do EKS. O target group e anexado a ela."
+  description = "ASG que sustenta o node group do EKS. Os target groups sao anexados a ela."
   type        = string
 }
 
-variable "node_port" {
-  description = "NodePort fixo do Service da aplicacao. Contrato com o repositorio mechanical-hub."
-  type        = number
-}
+variable "services" {
+  description = <<-EOT
+    Servico -> { node_port, health_check_path }. Cada item gera um target
+    group, um listener na mesma porta e uma regra de entrada no cluster SG.
+    A node_port e contrato com o manifesto do Service no repositorio do
+    servico.
+  EOT
+  type = map(object({
+    node_port         = number
+    health_check_path = string
+  }))
 
-variable "health_check_path" {
-  description = "Path HTTP verificado pelo health check do target group, na porta node_port."
-  type        = string
+  validation {
+    condition     = length(var.services) > 0
+    error_message = "Informe ao menos um servico."
+  }
 }
 
 variable "tags" {

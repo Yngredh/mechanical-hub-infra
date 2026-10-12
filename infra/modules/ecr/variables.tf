@@ -1,6 +1,16 @@
 variable "project" {
-  description = "Nome do projeto. O repositorio criado e <project>/api."
+  description = "Nome do projeto. Cada repositorio criado e <project>/<servico>."
   type        = string
+}
+
+variable "services" {
+  description = "Servicos que publicam imagem. Um repositorio ECR por item."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.services) > 0 && length(var.services) == length(distinct(var.services))
+    error_message = "services precisa ter ao menos um item, sem repeticao."
+  }
 }
 
 variable "image_retention_count" {

@@ -20,14 +20,21 @@
 #     as credenciais do pipeline) que ja aplica VPC/EKS/ECR com sucesso hoje —
 #     zero permissao nova, zero dependencia de um controller adicional.
 #
-# O Service da aplicacao (mechanical-hub) vira type: NodePort na porta fixa
-# var.node_port. O target group aponta para essa porta, anexado a Auto Scaling
-# Group dos nodes: o kube-proxy distribui a partir dai para os pods, sem o NLB
-# precisar saber onde cada pod esta.
+# Cada servico (Fase 4, ADR-0005) tem um Service type: NodePort numa porta
+# fixa (var.services). Para cada um ha um target group nessa porta, anexado a
+# Auto Scaling Group dos nodes, e um listener na mesma porta do NLB: o
+# kube-proxy distribui a partir dai para os pods, sem o NLB precisar saber
+# onde cada pod esta. Um NLB so para todos — o mechanical-hub-auth continua
+# com um unico VPC Link e escolhe o servico pela porta.
 # =============================================================================
 
 locals {
   name_prefix = "${var.project}-${var.environment}"
+
+  # Nome de target group tem no maximo 32 caracteres, e
+  # "mechanical-hub-production-orchestrator" tem 38. O ambiente entra
+  # abreviado (prod, stag) so aqui; o resto dos recursos usa o nome inteiro.
+  tg_prefix = "${var.project}-${substr(var.environment, 0, 4)}"
 }
 
 resource "aws_lb" "app" {
@@ -40,8 +47,10 @@ resource "aws_lb" "app" {
 }
 
 resource "aws_lb_target_group" "app" {
-  name        = "${local.name_prefix}-tg"
-  port        = var.node_port
+  for_each = var.services
+
+  name        = "${local.tg_prefix}-${each.key}"
+  port        = each.value.node_port
   protocol    = "TCP"
   vpc_id      = var.vpc_id
   target_type = "instance"
@@ -57,44 +66,87 @@ resource "aws_lb_target_group" "app" {
 
   health_check {
     protocol            = "HTTP"
-    path                = var.health_check_path
-    port                = tostring(var.node_port)
+    path                = each.value.health_check_path
+    port                = tostring(each.value.node_port)
     healthy_threshold   = 3
     unhealthy_threshold = 3
     interval            = 10
   }
 
-  tags = merge(var.tags, { Name = "${local.name_prefix}-tg" })
+  tags = merge(var.tags, { Name = "${local.tg_prefix}-${each.key}", Service = each.key })
+
+  lifecycle {
+    # O listener aponta para o target group: sem isto, uma substituicao tenta
+    # apagar o target group ainda em uso e falha com ResourceInUse.
+    create_before_destroy = true
+
+    precondition {
+      condition     = length("${local.tg_prefix}-${each.key}") <= 32
+      error_message = "Nome do target group passa de 32 caracteres; encurte o nome do servico."
+    }
+  }
 }
 
-# Anexa o target group a ASG do node group inteiro: escala/substitui nodes sem
-# reconciliacao manual, o proprio ASG mantem os membros do target group em dia.
+# Anexa cada target group a ASG do node group inteiro: escala/substitui nodes
+# sem reconciliacao manual, o proprio ASG mantem os membros em dia.
 resource "aws_autoscaling_attachment" "app" {
+  for_each = var.services
+
   autoscaling_group_name = var.autoscaling_group_name
-  lb_target_group_arn    = aws_lb_target_group.app.arn
+  lb_target_group_arn    = aws_lb_target_group.app[each.key].arn
 }
 
 resource "aws_lb_listener" "app" {
+  for_each = var.services
+
   load_balancer_arn = aws_lb.app.arn
-  port              = var.node_port
+  port              = each.value.node_port
   protocol          = "TCP"
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.app.arn
+    target_group_arn = aws_lb_target_group.app[each.key].arn
   }
 }
 
-# Libera o NodePort da aplicacao a partir das subnets privadas — de la vem o
-# trafego do NLB, com preserve_client_ip desligado acima.
+# Libera a NodePort de cada servico a partir das subnets privadas — de la vem
+# o trafego do NLB, com preserve_client_ip desligado acima. A regra vai no
+# cluster security group gerenciado pelo EKS, que e o anexado aos nodes; o SG
+# adicional do modulo eks nao esta nos nodes e uma regra nele nao teria efeito.
 resource "aws_security_group_rule" "app_nodeport_from_nlb" {
-  security_group_id = var.node_security_group_id
+  for_each = var.services
+
+  security_group_id = var.cluster_security_group_id
   type              = "ingress"
-  from_port         = var.node_port
-  to_port           = var.node_port
+  from_port         = each.value.node_port
+  to_port           = each.value.node_port
   protocol          = "tcp"
   cidr_blocks       = var.private_subnet_cidrs
-  description       = "NodePort da aplicacao, alcancado pelo NLB interno (VPC Link do mechanical-hub-auth)"
+  description       = "NodePort do servico ${each.key}, alcancado pelo NLB interno (VPC Link do mechanical-hub-auth)"
+}
+
+# Na Fase 3 havia um unico servico (o monolito) na porta 30080, que agora e a
+# do orders. Mover os enderecos evita que o listener novo da 30080 seja criado
+# antes de o antigo ser apagado (DuplicateListener) e que a regra de SG
+# identica colida com a anterior.
+moved {
+  from = aws_lb_target_group.app
+  to   = aws_lb_target_group.app["orders"]
+}
+
+moved {
+  from = aws_autoscaling_attachment.app
+  to   = aws_autoscaling_attachment.app["orders"]
+}
+
+moved {
+  from = aws_lb_listener.app
+  to   = aws_lb_listener.app["orders"]
+}
+
+moved {
+  from = aws_security_group_rule.app_nodeport_from_nlb
+  to   = aws_security_group_rule.app_nodeport_from_nlb["orders"]
 }
 
 # =============================================================================
@@ -107,7 +159,7 @@ resource "aws_security_group_rule" "app_nodeport_from_nlb" {
 #
 # A ponte reaproveita o mesmo NLB interno que ja atende a aplicacao: mais um
 # listener, apontando para o NodePort em que o coletor foi exposto. Zero
-# recurso de rede novo, zero IAM, e o mesmo padrao ja validado na porta 30080.
+# recurso de rede novo, zero IAM, e o mesmo padrao das portas dos servicos.
 #
 # Tudo aqui e opcional (count): com var.otlp_node_port nulo, nada e criado e o
 # modulo continua se comportando exatamente como antes.
@@ -163,7 +215,7 @@ resource "aws_lb_listener" "otlp" {
 resource "aws_security_group_rule" "otlp_nodeport_from_nlb" {
   count = var.otlp_node_port == null ? 0 : 1
 
-  security_group_id = var.node_security_group_id
+  security_group_id = var.cluster_security_group_id
   type              = "ingress"
   from_port         = var.otlp_node_port
   to_port           = var.otlp_node_port

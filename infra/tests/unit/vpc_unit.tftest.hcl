@@ -1,6 +1,7 @@
 # Testes unitarios do modulo VPC.
 # Usa mock_provider — nao exige credenciais AWS nem LocalStack.
-# Execute a partir de infra/: terraform test -filter=tests/unit/vpc_unit.tftest.hcl
+# Execute a partir de infra/:
+#   terraform test -test-directory=tests/unit -filter=tests/unit/vpc_unit.tftest.hcl
 
 mock_provider "aws" {
   mock_resource "aws_vpc" {
@@ -40,7 +41,7 @@ run "vpc_plan_is_valid" {
   command = plan
 
   module {
-    source = "../../modules/vpc"
+    source = "./modules/vpc"
   }
 
   assert {
@@ -58,7 +59,7 @@ run "one_subnet_per_az_is_planned" {
   command = plan
 
   module {
-    source = "../../modules/vpc"
+    source = "./modules/vpc"
   }
 
   assert {
@@ -76,7 +77,7 @@ run "private_subnets_are_not_public" {
   command = plan
 
   module {
-    source = "../../modules/vpc"
+    source = "./modules/vpc"
   }
 
   assert {
@@ -94,7 +95,7 @@ run "cidr_az_mismatch_is_caught" {
   command = plan
 
   module {
-    source = "../../modules/vpc"
+    source = "./modules/vpc"
   }
 
   # Tres CIDRs para duas AZs: sem a precondicao, o modulo criaria duas subnets

@@ -1,16 +1,24 @@
+# Um repositorio por servico (Fase 4, ADR-0005). Cada servico tem pipeline
+# proprio e publica sua imagem em <project>/<servico>; a lifecycle policy e a
+# mesma para todos.
+
 resource "aws_ecr_repository" "this" {
-  name                 = "${var.project}/api"
+  for_each = toset(var.services)
+
+  name                 = "${var.project}/${each.key}"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
   }
 
-  tags = var.tags
+  tags = merge(var.tags, { Service = each.key })
 }
 
 resource "aws_ecr_lifecycle_policy" "this" {
-  repository = aws_ecr_repository.this.name
+  for_each = aws_ecr_repository.this
+
+  repository = each.value.name
 
   policy = jsonencode({
     rules = [

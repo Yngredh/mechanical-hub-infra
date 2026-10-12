@@ -17,24 +17,32 @@ public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
 private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24"]
 
 # --- EKS --------------------------------------------------------------------
-# desired = 3 desde que a stack de observabilidade entrou: ela soma ~0,6 vCPU e
-# ~1,8 GiB so em requests. Com 2 nodes t3.medium, ela e a aplicacao com HPA
-# passam a disputar espaco e aparecem pods em Pending.
+# Fase 4: 3 x t3.large para os 4 servicos, o MongoDB e a observabilidade.
+# Limite do AWS Academy Lab: 9 instancias e 32 vCPU na conta.
 eks_cluster_version    = "1.33"
-eks_node_instance_type = "t3.medium"
+eks_node_instance_type = "t3.large"
 eks_node_desired_size  = 3
 eks_node_min_size      = 1
 eks_node_max_size      = 5
+
+# Driver EBS CSI (sem IRSA) + StorageClass gp3 para o MongoDB. Desligue se o
+# driver falhar por permissao no Lab — o MongoDB cai para armazenamento efemero.
+eks_ebs_csi_enabled = true
 
 # --- ECR --------------------------------------------------------------------
 ecr_image_retention_count = 10
 
 # --- NLB interno da aplicacao -------------------------------------------------
-# Contrato de porta com o mechanical-hub: o Service la expoe NodePort neste
-# valor. Mudar aqui exige mudar o manifest k8s junto.
-app_node_port         = 30080
-app_health_check_path = "/actuator/health/readiness"
-app_namespace         = "production"
+# Contrato de porta com cada servico: o Service expoe NodePort neste valor, e
+# o NLB tem um listener na mesma porta. Mudar aqui exige mudar o manifesto do
+# servico junto. health_check_path e opcional (padrao: readiness do actuator).
+services = {
+  orders       = { node_port = 30080 }
+  stock        = { node_port = 30081 }
+  billing      = { node_port = 30082 }
+  orchestrator = { node_port = 30083 }
+}
+app_namespace = "production"
 
 # --- Observabilidade (RFC-0004) ----------------------------------------------
 # OpenTelemetry + Prometheus + Loki + Tempo + Grafana, instalados no cluster.
@@ -48,11 +56,9 @@ observability_logs_retention    = "168h"
 observability_traces_retention  = "48h"
 
 # Armazenamento efemero por padrao: reiniciar um pod zera o historico daquele
-# sinal, mas a stack sobe sem depender de driver de volume. Para trocar por
-# volumes persistentes, ligue os dois de uma vez — a partir do Kubernetes 1.27
-# um PVC sem driver CSI fica pendente para sempre.
-observability_persistence_enabled  = false
-observability_manage_ebs_csi_addon = false
+# sinal. Para volumes persistentes (StorageClass gp3), ligue abaixo — exige
+# eks_ebs_csi_enabled = true.
+observability_persistence_enabled = false
 
 # NodePort do coletor OTLP/HTTP. So passa a ser util quando as Lambdas do
 # mechanical-hub-auth forem instrumentadas — elas rodam na VPC, mas fora do

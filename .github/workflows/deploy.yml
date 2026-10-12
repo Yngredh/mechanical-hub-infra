@@ -39,7 +39,15 @@ jobs:
       eks-cluster-name: ${{ steps.tf-outputs.outputs.eks_cluster_name }}
       eks-cluster-endpoint: ${{ steps.tf-outputs.outputs.eks_cluster_endpoint }}
       eks-cluster-security-group-id: ${{ steps.tf-outputs.outputs.eks_cluster_security_group_id }}
-      ecr-repository-url: ${{ steps.tf-outputs.outputs.ecr_repository_url }}
+      eks-cluster-ca-certificate: ${{ steps.tf-outputs.outputs.eks_cluster_ca_certificate }}
+      storage-class-name: ${{ steps.tf-outputs.outputs.storage_class_name }}
+      # Mapas em JSON compacto, indexados por servico (ecr, app) ou por fila
+      # (sqs). O consumidor le com fromJSON(...)['orders'] ou jq.
+      ecr-repository-urls: ${{ steps.tf-outputs.outputs.ecr_repository_urls }}
+      app-backend-base-urls: ${{ steps.tf-outputs.outputs.app_backend_base_urls }}
+      sqs-queue-urls: ${{ steps.tf-outputs.outputs.sqs_queue_urls }}
+      sqs-queue-arns: ${{ steps.tf-outputs.outputs.sqs_queue_arns }}
+      sqs-dlq-urls: ${{ steps.tf-outputs.outputs.sqs_dlq_urls }}
       otlp-grpc-endpoint: ${{ steps.tf-outputs.outputs.otlp_grpc_endpoint }}
       otlp-http-endpoint: ${{ steps.tf-outputs.outputs.otlp_http_endpoint }}
 
@@ -87,7 +95,11 @@ jobs:
 
       - name: Limpar target groups orfaos do app-lb
         run: |
-          for TG in "mechanical-hub-${{ steps.state.outputs.environment }}-tg" "mechanical-hub-${{ steps.state.outputs.environment }}-otlp"; do
+          ENV="${{ steps.state.outputs.environment }}"
+          # -tg e o target group unico da Fase 3; os demais sao um por servico
+          # (o ambiente entra abreviado no nome: limite de 32 caracteres).
+          for TG in "mechanical-hub-${ENV}-tg" "mechanical-hub-${ENV}-otlp" \
+                    mechanical-hub-${ENV:0:4}-{orders,stock,billing,orchestrator}; do
             ARN=$(aws elbv2 describe-target-groups --names "$TG" --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
             if [ -n "$ARN" ] && [ "$ARN" != "None" ]; then
               echo "Apagando target group orfao: $TG ($ARN)"
@@ -124,17 +136,20 @@ jobs:
         id: tf-outputs
         working-directory: ${{ env.TF_DIR }}
         run: |
-          # Escalares via -raw; listas via -json, para nao quebrar em virgulas.
+          # Escalares via -raw; listas e mapas via -json, para nao quebrar em
+          # virgulas.
           for o in vpc_id vpc_cidr eks_cluster_name eks_cluster_endpoint \
-                   eks_cluster_security_group_id ecr_repository_url; do
+                   eks_cluster_security_group_id eks_cluster_ca_certificate; do
             echo "${o}=$(terraform output -raw ${o})" >> $GITHUB_OUTPUT
           done
-          for o in private_subnet_ids private_subnet_cidrs public_subnet_ids; do
+          for o in private_subnet_ids private_subnet_cidrs public_subnet_ids \
+                   ecr_repository_urls app_backend_base_urls \
+                   sqs_queue_urls sqs_queue_arns sqs_dlq_urls; do
             echo "${o}=$(terraform output -json ${o} | jq -c .)" >> $GITHUB_OUTPUT
           done
-          # Os endpoints de telemetria sao nulos quando a observabilidade esta
-          # desligada — `output -raw` falharia nesse caso, entao passa por jq.
-          for o in otlp_grpc_endpoint otlp_http_endpoint; do
+          # Nulos quando o recurso esta desligado (observabilidade, driver EBS
+          # CSI) — `output -raw` falharia nesse caso, entao passa por jq.
+          for o in otlp_grpc_endpoint otlp_http_endpoint storage_class_name; do
             echo "${o}=$(terraform output -json ${o} | jq -r '. // ""')" >> $GITHUB_OUTPUT
           done
 
@@ -154,11 +169,15 @@ jobs:
             echo "| eks_cluster_name | \`$(terraform output -raw eks_cluster_name)\` |"
             echo "| eks_cluster_endpoint | \`$(terraform output -raw eks_cluster_endpoint)\` |"
             echo "| eks_cluster_security_group_id | \`$(terraform output -raw eks_cluster_security_group_id)\` |"
-            echo "| ecr_repository_url | \`$(terraform output -raw ecr_repository_url)\` |"
+            echo "| storage_class_name | \`$(terraform output -json storage_class_name | jq -r '. // "(driver EBS CSI desligado)"')\` |"
+            echo "| ecr_repository_urls | \`$(terraform output -json ecr_repository_urls | jq -c .)\` |"
+            echo "| app_backend_base_urls | \`$(terraform output -json app_backend_base_urls | jq -c .)\` |"
+            echo "| sqs_queue_urls | \`$(terraform output -json sqs_queue_urls | jq -c .)\` |"
+            echo "| sqs_dlq_urls | \`$(terraform output -json sqs_dlq_urls | jq -c .)\` |"
             echo ""
             echo "State: \`s3://${{ steps.state.outputs.bucket }}/${{ env.TF_STATE_KEY }}\`"
             echo ""
-            echo "Consumidores (ADR-0004): \`mechanical-hub-database\`, \`mechanical-hub-auth\` e o pipeline de deploy de \`mechanical-hub\`."
+            echo "Consumidores (ADR-0004): \`mechanical-hub-database\`, \`mechanical-hub-auth\` e os pipelines de \`orders\`, \`stock\`, \`billing\` e \`orchestrator\`."
           } >> $GITHUB_STEP_SUMMARY
 
           NS=$(terraform output -json observability_namespace | jq -r '. // ""')

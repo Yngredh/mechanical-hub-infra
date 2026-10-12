@@ -37,7 +37,7 @@ output "tempo_url" {
 #
 # Enderecos que a aplicacao principal (mechanical-hub) precisa conhecer para
 # exportar telemetria. Sao interface publica do modulo, no mesmo espirito de
-# app_backend_base_url.
+# app_backend_base_urls.
 #
 # ATENCAO — estes enderecos so resolvem DE DENTRO do cluster. As Lambdas do
 # mechanical-hub-auth rodam na VPC, mas fora do Kubernetes: elas nao enxergam

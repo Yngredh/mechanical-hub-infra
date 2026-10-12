@@ -55,18 +55,24 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
+      # -test-directory e obrigatorio: o terraform test so procura arquivos em
+      # tests/, nao em subpastas. Sem ele, os -filter=tests/unit/... nao
+      # encontravam nada e o job passava com 0 testes executados.
       - name: Terraform init (backend local — sem AWS)
         working-directory: ${{ env.TF_DIR }}
-        run: terraform init -backend=false -input=false
+        run: terraform init -backend=false -input=false -test-directory=tests/unit
 
+      # Roda todos os arquivos de tests/unit (vpc, ecr, eks, sqs, app-lb,
+      # observabilidade e o modulo raiz) — arquivo novo entra sem mexer aqui.
+      # Os de tests/integration ficam de fora: dependem de LocalStack.
+      # O grep final barra o "0 passed" silencioso que existia antes.
       - name: Terraform test
         working-directory: ${{ env.TF_DIR }}
         run: |
-          terraform test -verbose \
-            -filter=tests/unit/region_unit.tftest.hcl \
-            -filter=tests/unit/vpc_unit.tftest.hcl \
-            -filter=tests/unit/ecr_unit.tftest.hcl \
-            -filter=tests/unit/observability_unit.tftest.hcl
+          set -euo pipefail
+          terraform test -verbose -no-color -test-directory=tests/unit | tee /tmp/test.log
+          grep -Eq '^Success! [1-9][0-9]* passed, 0 failed' /tmp/test.log \
+            || { echo "::error::Nenhum teste unitario foi executado."; exit 1; }
 
   dashboards:
     name: Dashboards do Grafana
@@ -93,7 +99,7 @@ jobs:
             # Todo painel precisa apontar para um datasource provisionado pelo
             # modulo; um UID errado gera painel vazio sem mensagem de erro.
             jq -e '[.panels[] | select(.type != "row") | .datasource.uid]
-                   | all(. == "mh-prometheus" or . == "mh-loki" or . == "mh-tempo")' "$f" > /dev/null \
-              || { echo "::error file=$f::painel aponta para datasource fora de mh-prometheus/mh-loki/mh-tempo"; exit 1; }
+                   | all(. == "mh-prometheus" or . == "mh-loki" or . == "mh-tempo" or . == "mh-cloudwatch")' "$f" > /dev/null \
+              || { echo "::error file=$f::painel aponta para datasource fora de mh-prometheus/mh-loki/mh-tempo/mh-cloudwatch"; exit 1; }
             echo "OK $f — $(jq -r '.title' "$f") ($(jq '[.panels[] | select(.type != "row")] | length' "$f") paineis)"
           done
